@@ -36,7 +36,9 @@ namespace Billions
         static long _classifyAt;
         static byte[] _dist = new byte[0]; static int _n;
 
-        static byte[] _hot; static int _hotN; static long _hotAt;
+        sealed class Hot { public readonly byte[] Map; public readonly int N; public readonly long At; public Hot(byte[] map, int n, long at) { Map = map; N = n; At = at; } }
+        static volatile Hot _hotSnap;
+        static int _gen;
         static Task _classTask; static AccessTools.FieldRef<DXGame, List<DXEntity>> _entities;
         static int _step;
         [ThreadStatic] static Far _cur;
@@ -81,30 +83,39 @@ namespace Billions
         static void WallPost(DeffensiveStructure __result) { if (!_expectNullWall) return; _expectNullWall = false; if (__result != null) Interlocked.Increment(ref WallWrong); }
         static bool HotFar(int cx, int cy, int need)
         {
-            var hot = _hot; int n = _hotN;
-            if (hot == null || n <= 0 || n != DXWorldGrid.NCells || Clock.Ms - _hotAt > 2500) return false;
+            var h = _hotSnap; int n = h != null ? h.N : 0;
+            if (h == null || n != DXWorldGrid.NCells || Clock.Ms - h.At > 2500) return false;
+            var hot = h.Map;
             if (cx < 0 || cy < 0 || cx >= n || cy >= n) return false;
             return hot[cx * n + cy] > need;
         }
         static bool NearestPre(PointF p, float radius, uint mask, ref DXEntity __result)
         {
-            if (!AiSkip || mask != 32768U) return true;
-            Interlocked.Increment(ref AiTotal);
-            if (!HotFar((int)p.X, (int)p.Y, (int)Math.Ceiling(radius) + 1 + AiMargin)) return true;
-            Interlocked.Increment(ref AiSkipped);
-            if (AiVerify) { _expectNull = true; return true; }
-            __result = null; return false;
+            try
+            {
+                if (!AiSkip || mask != 32768U) return true;
+                Interlocked.Increment(ref AiTotal);
+                if (!HotFar((int)p.X, (int)p.Y, (int)Math.Ceiling(radius) + 1 + AiMargin)) return true;
+                Interlocked.Increment(ref AiSkipped);
+                if (AiVerify) { _expectNull = true; return true; }
+                __result = null; return false;
+            }
+            catch (Exception e) { Log.Error("far nearest", e); return true; }
         }
         static bool WallPre(CEntityWatcher __instance, int radius, ref DeffensiveStructure __result)
         {
-            if (!AiSkip) return true;
-            Interlocked.Increment(ref WallTotal);
-            var e = __instance.Entity; if (e == null) return true;
-            var c = e.Cell;
-            if (!HotFar(c.X, c.Y, Math.Max(1, radius) + (int)Math.Ceiling(e.Width) + 2 + 2)) return true;
-            Interlocked.Increment(ref WallSkipped);
-            if (AiVerify) { _expectNullWall = true; return true; }
-            __result = null; return false;
+            try
+            {
+                if (!AiSkip) return true;
+                Interlocked.Increment(ref WallTotal);
+                var e = __instance.Entity; if (e == null) return true;
+                var c = e.Cell;
+                if (!HotFar(c.X, c.Y, Math.Max(1, radius) + (int)Math.Ceiling(e.Width) + 2 + 2)) return true;
+                Interlocked.Increment(ref WallSkipped);
+                if (AiVerify) { _expectNullWall = true; return true; }
+                __result = null; return false;
+            }
+            catch (Exception e) { Log.Error("far wall", e); return true; }
         }
         public static void TakeAiStats(out long total, out long skipped, out long wtotal, out long wskipped)
         { total = Interlocked.Exchange(ref AiTotal, 0); skipped = Interlocked.Exchange(ref AiSkipped, 0); wtotal = Interlocked.Exchange(ref WallTotal, 0); wskipped = Interlocked.Exchange(ref WallSkipped, 0); }
@@ -291,18 +302,27 @@ namespace Billions
         {
             if (_classTask != null && !_classTask.IsCompleted) return;
             int n = DXWorldGrid.NCells; if (n <= 0 || _entities == null) return;
-            DXEntity[] all;
-            try { var g = DXGame.Current; lock (DXGame.SyncLogic) all = _entities(g).ToArray(); } catch { return; }
+            DXEntity[] all = null; bool taken = false;
+            int gen = Volatile.Read(ref _gen);
+            try
+            {
+                var g = DXGame.Current;
+                Monitor.TryEnter(DXGame.SyncLogic, ref taken);
+                if (taken) all = _entities(g).ToArray();
+            }
+            catch { all = null; }
+            finally { if (taken) Monitor.Exit(DXGame.SyncLogic); }
+            if (all == null) return;
             _classTask = Task.Factory.StartNew(() =>
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                try { ClassifyBg(all, n); } catch (Exception e) { Log.Error("far classify", e); }
+                try { ClassifyBg(all, n, gen); } catch (Exception e) { Log.Error("far classify", e); }
                 ClassifyMs = sw.Elapsed.TotalMilliseconds;
             });
         }
 
 
-        static void ClassifyBg(DXEntity[] all, int n)
+        static void ClassifyBg(DXEntity[] all, int n, int gen)
         {
             var bas = new byte[n * n]; var hot = new byte[n * n];
             for (int i = 0; i < bas.Length; i++) { bas[i] = 255; hot[i] = 255; }
@@ -342,7 +362,8 @@ namespace Billions
                 catch { }
             }
 
-            _zs = zs.ToArray(); _dist = bas; _n = n; _hot = hot; _hotN = n; _hotAt = Clock.Ms;
+            if (gen != Volatile.Read(ref _gen)) return;
+            _zs = zs.ToArray(); _dist = bas; _n = n; _hotSnap = new Hot(hot, n, Clock.Ms);
             ZXEntity dummy; while (_toFar.TryDequeue(out dummy)) { } while (_toNear.TryDequeue(out dummy)) { }
             foreach (var z in toNear) _toNear.Enqueue(z); foreach (var z in toFar) _toFar.Enqueue(z);
         }
@@ -452,7 +473,16 @@ namespace Billions
                 + " · 거리(0-2/3-5/6-9/10-19/20+) 몸체 " + string.Join("/", hb) + " 없음 " + string.Join("/", hn);
         }
 
-        public static void OnLevelUnloaded() { _hot = null; _hotN = 0; _zs = new Zombie[0]; _far.Clear(); _snap = new Far[0]; ZXEntity d; while (_toFar.TryDequeue(out d)) { } while (_toNear.TryDequeue(out d)) { } _moveTask = null; _moveSnap = null; _ready = null; _n = 0; }
+        public static void OnLevelUnloaded()
+        {
+            Interlocked.Increment(ref _gen);
+            _hotSnap = null;
+            var mt = _moveTask; if (mt != null) { try { mt.Wait(500); } catch { } }
+            _zs = new Zombie[0]; _far.Clear(); _snap = new Far[0];
+            ZXEntity d; while (_toFar.TryDequeue(out d)) { } while (_toNear.TryDequeue(out d)) { }
+            lock (_born) _born.Clear();
+            _moveTask = null; _moveSnap = null; _ready = null; _n = 0;
+        }
         public static string Set(bool? on, int? farR, int? nearR)
         {
             if (on.HasValue) Enabled = on.Value; if (farR.HasValue) FarRadius = Math.Max(4, farR.Value); if (nearR.HasValue) NearRadius = Math.Max(1, Math.Min(FarRadius - 1, nearR.Value));

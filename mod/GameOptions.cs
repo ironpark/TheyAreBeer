@@ -40,8 +40,8 @@ namespace Billions
                 Directory.CreateDirectory(Log.Dir);
                 string tmp = FilePath + ".tmp";
                 File.WriteAllText(tmp, "{\"lightLifeBars\":" + (LightLifeBars ? "true" : "false") + "}");
-                if (File.Exists(FilePath)) File.Delete(FilePath);
-                File.Move(tmp, FilePath);
+                if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null);
+                else File.Move(tmp, FilePath);
             }
             catch (Exception e) { Log.Error("options save", e); }
         }
@@ -73,6 +73,7 @@ namespace Billions
                 float labelW = win.PageSize.Width * 0.3f;
                 var size = new SizeF(win.PageSize.Width * 0.3f, DXScene.ScreenVirtualUnit * 20f);
                 string title = Text("좀비 체력바 가볍게(최적화)", "Light zombie health bars");
+                if (HasRow(grid, title)) return;
                 var label = TextTemplates.Interface.get_NormalBig().CreateObject(title, new ContentAlignment?(ContentAlignment.TopRight), new float?(labelW));
                 var ch = new ZXCheckBox(); ch.Size = size; ch.Checked = LightLifeBars;
                 ch.CheckedChanged += delegate (DXCheckBox c)
@@ -95,21 +96,24 @@ namespace Billions
             return en;
         }
 
+        static bool HasRow(DXGridLayout g, string label)
+        {
+            try
+            {
+                for (int r = 0; r < g.NRows; r++)
+                {
+                    var t = g[0, r] != null ? g[0, r].Object as DXTextObject : null;
+                    if (t != null && t.Text == label) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
         static DXGridLayout FindGrid(DXObject o, string fastLabel)
         {
             var g = o as DXGridLayout;
-            if (g != null)
-            {
-                try
-                {
-                    for (int r = 0; r < g.NRows; r++)
-                    {
-                        var t = g[0, r] != null ? g[0, r].Object as DXTextObject : null;
-                        if (t != null && t.Text == fastLabel) return g;
-                    }
-                }
-                catch { }
-            }
+            if (g != null && HasRow(g, fastLabel)) return g;
             var ch = _children(o); if (ch == null) return null;
             for (int i = 0; i < ch.Count; i++) { var f = ch[i] != null ? FindGrid(ch[i], fastLabel) : null; if (f != null) return f; }
             return null;

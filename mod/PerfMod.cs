@@ -103,6 +103,7 @@ namespace Billions
         {
             try { EnergyFix.OnLevelUnloaded(); } catch (Exception e) { Log.Error("energy unload", e); }
             try { FarField.OnLevelUnloaded(); } catch (Exception e) { Log.Error("far unload", e); }
+            try { ZSort.OnLevelUnloaded(); } catch (Exception e) { Log.Error("zsort unload", e); }
         }
     }
 

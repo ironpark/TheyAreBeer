@@ -28,7 +28,7 @@ namespace Billions
         [ThreadStatic] static long _t0;
 
         sealed class Acc { public long Q, No, Unknown, Rebuilds, RebuildTicks, Orig, OrigFail, OrigTicks, Spots, Mismatch, Adds, Removes, Unit, UnitFail, UnitTicks, World, WorldTicks; }
-        public static bool MeasureUnits = true;
+        public static bool MeasureUnits = false;
         static Acc _sec = new Acc(), _min = new Acc();
         static long _minAt, _slowLogAt;
         public static int Installed;
@@ -111,6 +111,7 @@ namespace Billions
             {
                 long n = Interlocked.Increment(ref _sec.Mismatch);
                 if (n <= 3) Log.Info("energy links MISMATCH: 원작 " + orig + " · 번호표 " + mine + " (덩어리 " + Links.Groups + ")");
+                if (Enabled) { Enabled = false; Interlocked.Increment(ref _ver); Log.Info("energy fix: 원작과 답이 달라 번호표를 끔 — 이번 실행은 원작 길 찾기 그대로"); }
             }
         }
 

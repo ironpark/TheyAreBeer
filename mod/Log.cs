@@ -62,9 +62,28 @@ namespace Billions
             catch { }
         }
 
+        sealed class Seen { public long Start; public int Count; public int Dropped; }
+        static readonly System.Collections.Generic.Dictionary<string, Seen> _seen = new System.Collections.Generic.Dictionary<string, Seen>();
+        public const int ErrWindowMs = 10000, ErrPerWindow = 3;
+
         public static void Error(string where, Exception e)
         {
-            Info("[ERR] " + where + ": " + e);
+            string key = where + "|" + (e != null ? e.GetType().FullName + "|" + e.Message : "null");
+            long now = Clock.Ms; int dropped = 0; bool write;
+            lock (_seen)
+            {
+                Seen s;
+                if (!_seen.TryGetValue(key, out s))
+                {
+                    if (_seen.Count >= 256) _seen.Clear();
+                    s = new Seen { Start = now }; _seen[key] = s;
+                }
+                if (now - s.Start >= ErrWindowMs) { dropped = s.Dropped; s.Start = now; s.Count = 0; s.Dropped = 0; }
+                write = ++s.Count <= ErrPerWindow;
+                if (!write) s.Dropped++;
+            }
+            if (!write) return;
+            Info("[ERR] " + where + ": " + e + (dropped > 0 ? Environment.NewLine + "    (앞 " + (ErrWindowMs / 1000) + "초 동안 같은 오류 " + dropped + "번 더 — 생략)" : ""));
         }
     }
 }

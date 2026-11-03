@@ -12,7 +12,16 @@ namespace Billions
         public static bool Nominal = true;
         public static int Installed, Iterations = 10;
         static Action<DXEntity> _startUpdatePhysics;
-        static object _postMethods; static MethodInfo _execAll;
+        static FieldInfo _pmField; static Type _execType; static MethodInfo _execAll;
+
+        static object PostMethods(out MethodInfo exec)
+        {
+            var o = _pmField != null ? _pmField.GetValue(null) : null;
+            if (o == null) { exec = null; return null; }
+            var t = o.GetType();
+            if (t != _execType) { _execAll = AccessTools.Method(t, "ExecuteAll"); _execType = t; }
+            exec = _execAll; return o;
+        }
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern IntPtr GetCurrentThread();
         [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern bool GetThreadTimes(IntPtr h, out long c, out long e, out long k, out long u);
@@ -37,7 +46,9 @@ namespace Billions
                 var ud = AccessTools.Method(typeof(DXPhysicWorld), "UpdateDefaultTime");
                 if (sup == null || pm == null || ud == null) { Log.Info("HOOK MISSING (optional): 물리 보간 기준 — 원작 그대로"); return; }
                 _startUpdatePhysics = AccessTools.MethodDelegate<Action<DXEntity>>(sup);
-                _postMethods = pm.GetValue(null); _execAll = AccessTools.Method(_postMethods.GetType(), "ExecuteAll");
+                _pmField = pm;
+                MethodInfo exec; var pmo = PostMethods(out exec);
+                if (pmo != null && exec == null) { Log.Info("HOOK MISSING (optional): 물리 보간 기준 — PostMethods.ExecuteAll 없음, 원작 그대로"); return; }
                 h.Patch(ud, new HarmonyMethod(typeof(PhysicsTime), nameof(UpdatePre)));
                 var sep = AccessTools.Method(typeof(DXPhysicWorld), "OnBodySeparation"); if (sep != null) h.Patch(sep, new HarmonyMethod(typeof(PhysicsTime), nameof(SepPre)));
                 Installed = 1;
@@ -68,24 +79,30 @@ namespace Billions
             try
             {
                 if (!DXPhysicWorld.Initialized || !DXPhysicWorld.Enabled) return false;
+                MethodInfo exec; var postMethods = PostMethods(out exec);
+                if (postMethods == null || exec == null) return true;
                 var bodies = DXPhysicWorld.Bodies;
                 lock (DXPhysicWorld.Sync)
                 {
-                    DXGame.Current.OnStartPhysics();
-                    long pm0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                    _execAll.Invoke(_postMethods, null);
-                    PostMs = (System.Diagnostics.Stopwatch.GetTimestamp() - pm0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                    long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                    DXHelper_Task.For(0, bodies.Count, delegate (int a, int b)
+                    var game = DXGame.Current;
+                    game.OnStartPhysics();
+                    try
                     {
-                        for (int i = a; i < b; i++) { var e = bodies[i].GameEntity; if (e != null) _startUpdatePhysics(e); }
-                    }, 200, 0);
-                    FarField.BeforeStep();
-                    long t1 = System.Diagnostics.Stopwatch.GetTimestamp(), c0 = Cpu();
-                    DXPhysicWorld.Step(0.083333333333333329);
-                    long t2 = System.Diagnostics.Stopwatch.GetTimestamp(), c1 = Cpu();
-                    PreTicks += t1 - t0; StepWallTicks += t2 - t1; StepCpu100ns += c1 - c0; Steps++;
-                    DXGame.Current.OnFinishPhysics();
+                        long pm0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                        exec.Invoke(postMethods, null);
+                        PostMs = (System.Diagnostics.Stopwatch.GetTimestamp() - pm0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                        DXHelper_Task.For(0, bodies.Count, delegate (int a, int b)
+                        {
+                            for (int i = a; i < b; i++) { var e = bodies[i].GameEntity; if (e != null) _startUpdatePhysics(e); }
+                        }, 200, 0);
+                        FarField.BeforeStep();
+                        long t1 = System.Diagnostics.Stopwatch.GetTimestamp(), c0 = Cpu();
+                        DXPhysicWorld.Step(0.083333333333333329);
+                        long t2 = System.Diagnostics.Stopwatch.GetTimestamp(), c1 = Cpu();
+                        PreTicks += t1 - t0; StepWallTicks += t2 - t1; StepCpu100ns += c1 - c0; Steps++;
+                    }
+                    finally { game.OnFinishPhysics(); }
                 }
                 FarField.WaitMove();
                 long w0 = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -111,7 +128,7 @@ namespace Billions
                 DXPhysicWorld.NUpdates += 1U;
                 DXPhysicWorld.Iteration += 1U;
             }
-            catch { }
+            catch (Exception e) { Log.Error("physics step", e); }
             return false;
         }
     }

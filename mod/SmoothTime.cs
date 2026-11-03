@@ -45,23 +45,47 @@ namespace Billions
         {
             var g = __instance;
             if (Installed != 1 || g == null || g.Configuration == null || !g.Configuration.HighPerformanceTiming) return true;
+            Task started = null; bool threadStarted = false;
             try
             {
                 if (_task(g) != null || _thread(g) != null) g.UnloadPhysics();
                 _cancel(g) = false; _lastPhysUpd(g) = 0.0;
-                _task(g) = Task.Factory.StartNew(() => TimeLoop(g), TaskCreationOptions.LongRunning);
+                started = Task.Factory.StartNew(() => TimeLoop(g), TaskCreationOptions.LongRunning);
+                _task(g) = started;
                 var t = new Thread(() => PhysicsLoop(g));
-                _thread(g) = t; t.Start();
+                _thread(g) = t; t.Start(); threadStarted = true;
                 Log.Info("smooth time: 게임 시간 작업 시작(" + (Accurate ? "실제 경과 시간" : "원작 4 ms") + ")");
                 return false;
             }
-            catch (Exception e) { Log.Error("smooth time load", e); return true; }
+            catch (Exception e)
+            {
+                Log.Error("smooth time load", e);
+                if (threadStarted) return false;
+                if (started != null)
+                {
+                    try
+                    {
+                        _cancel(g) = true;
+                        try { started.Wait(1000); } catch { }
+                        _task(g) = null; _thread(g) = null; _cancel(g) = false;
+                    }
+                    catch (Exception e2) { Log.Error("smooth time load rollback", e2); }
+                }
+                return true;
+            }
+        }
+
+        static int _periodSet;
+        static void BeginTimerPeriodOnce()
+        {
+            if (Interlocked.Exchange(ref _periodSet, 1) != 0) return;
+            try { timeBeginPeriod(1); } catch { }
         }
 
         static void TimeLoop(DXGame g)
         {
             try { Thread.CurrentThread.Priority = ThreadPriority.AboveNormal; } catch { }
-            try { timeBeginPeriod(1); } catch { }
+            BeginTimerPeriodOnce();
             var sw = Stopwatch.StartNew();
             double last = sw.Elapsed.TotalMilliseconds, nextTick = DXHelper_Environment.Ticks + 4.0;
             float num3 = 1f;

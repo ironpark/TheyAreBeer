@@ -2,7 +2,8 @@
 /mod/out/
 /native/out/
 
-# Local game and TABModLoader references
+# Local game and TABModLoader references (scripts\setup.ps1 downloads them into refs/)
+/refs/
 TheyAreBillions.exe
 DXVision.dll
 0Harmony.dll

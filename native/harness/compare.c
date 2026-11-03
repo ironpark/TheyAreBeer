@@ -62,7 +62,7 @@ typedef struct {
 static int load(Api *a, const char *path, const char *name)
 {
 	memset(a, 0, sizeof(*a)); a->name = name;
-	wchar_t w[MAX_PATH]; MultiByteToWideChar(CP_UTF8, 0, path, -1, w, MAX_PATH);
+	wchar_t w[MAX_PATH]; MultiByteToWideChar(CP_ACP, 0, path, -1, w, MAX_PATH);
 	a->h = LoadLibraryExW(w, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
 	if (!a->h) { fprintf(stderr, "불러오기 실패 %s (%lu)\n", path, GetLastError()); return 0; }
 	LOAD(a, Space_Create); LOAD(a, Space_Step); LOAD(a, Space_IsLocked); LOAD(a, Space_SetCollisionCallback); LOAD(a, Space_SetSeparationCallback);
@@ -192,10 +192,10 @@ static void run(Api *A, int scene, int n, int steps, Trace *tr)
 static void write_cfg(void)
 {
 	char path[MAX_PATH]; GetModuleFileNameA(NULL, path, MAX_PATH);
-	FILE *f = fopen(path, "rb"); int32_t sum = 0; unsigned char buf[65536]; size_t r;
+	FILE *f = fopen(path, "rb"); int32_t sum = 0; if (!f) { fprintf(stderr, "읽기 실패 %s\n", path); exit(2); } unsigned char buf[65536]; size_t r;
 	while ((r = fread(buf, 1, sizeof buf, f)) > 0) for (size_t i = 0; i < r; i++) sum = (int32_t)((uint32_t)sum + (uint32_t)buf[i] * 2u + 1u);
 	fclose(f);
-	f = fopen("DXPhysicsNative.cfg", "w"); fprintf(f, "Iterations:%d", sum); fclose(f);
+	f = fopen("DXPhysicsNative.cfg", "w"); if (!f) { fprintf(stderr, "쓰기 실패 DXPhysicsNative.cfg\n"); exit(2); } fprintf(f, "Iterations:%d", sum); fclose(f);
 }
 
 static int compare(const char *label, Trace *a, Trace *b)
@@ -365,6 +365,7 @@ int main(int argc, char **argv)
 	}
 	int s0 = 0, s1 = 2; if (argc > 3 && strcmp(argv[3], "all")) s0 = s1 = atoi(argv[3]);
 	int n = argc > 4 ? atoi(argv[4]) : 300, steps = argc > 5 ? atoi(argv[5]) : 300, ok = 1;
+	if (n < 2048) printf("주의: 몸체 %d 개는 병렬 경로 기준(2048 이상, 접촉 기록 4096 · 접촉 정리 8192 이상)보다 적어 직렬 경로만 비교합니다.\n", n);
 	for (int s = s0; s <= s1; s++)
 	{
 		Trace ta = {0}, tb = {0};

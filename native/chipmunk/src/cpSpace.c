@@ -158,6 +158,7 @@ cpSpaceInit(cpSpace *space)
 	space->pooledArbiters = cpArrayNew(0);
 
 	space->contactBuffersHead = NULL;
+	for(int i=0; i<DX_CBUF_RING; i++){ space->dx_cbuf[i] = NULL; space->dx_cbcap[i] = 0; }
 	space->cachedArbiters = cpHashSetNew(0, (cpHashSetEqlFunc)arbiterSetEql);
 
 	space->constraints = cpArrayNew(0);
@@ -203,6 +204,8 @@ cpSpaceDestroy(cpSpace *space)
 
 	cpArrayFree(space->arbiters);
 	cpArrayFree(space->pooledArbiters);
+
+	for(int i=0; i<DX_CBUF_RING; i++){ cpfree(space->dx_cbuf[i]); space->dx_cbuf[i] = NULL; space->dx_cbcap[i] = 0; }
 
 	if(space->allocatedBuffers){
 		cpArrayFreeEach(space->allocatedBuffers, cpfree);

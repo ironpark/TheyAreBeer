@@ -2,6 +2,8 @@
 #include <intrin.h>
 #include "dxpool.h"
 
+void dx_diag_thread(void);
+
 #define DX_MAX_WORKERS 31
 #define DX_SPIN_US 60
 #define DX_SLEEP_MS 50
@@ -34,6 +36,7 @@ static struct {
 	volatile LONG64 work;
 	volatile LONG remaining;
 	volatile LONG quit;
+	volatile LONG busy;
 	dx_range_fn fn; void *ctx; int count, chunk;
 	int threads;
 	int broken;
@@ -58,6 +61,7 @@ static void run_chunks(int worker)
 static DWORD WINAPI worker_main(LPVOID arg)
 {
 	int id = (int)(INT_PTR)arg;
+	dx_diag_thread();
 	LONG seen = P.generation;
 	long long spinTicks = (long long)(DX_SPIN_US * qpc_us);
 	while (!P.quit)
@@ -89,6 +93,8 @@ void dx_pool_set_threads(int n)
 	resolve_synch(); init_clock();
 	if (n < 0) n = 0; if (n > DX_MAX_WORKERS) n = DX_MAX_WORKERS;
 	if (P.broken || n == P.threads) return;
+	// Never tear the pool down while a job is in flight on another thread.
+	while (InterlockedCompareExchange(&P.busy, 1, 0) != 0) SwitchToThread();
 
 	if (P.threads > 0)
 	{
@@ -96,8 +102,14 @@ void dx_pool_set_threads(int n)
 		DWORD r = WaitForMultipleObjects(P.threads, P.handles, TRUE, 5000);
 		for (int i = 0; i < P.threads; i++) CloseHandle(P.handles[i]);
 		P.threads = 0;
-		if (r != WAIT_OBJECT_0) { P.broken = 1; return; }
+		if (r != WAIT_OBJECT_0) { P.broken = 1; InterlockedExchange(&P.busy, 0); return; }
 		P.quit = 0;
+	}
+	if (n > 0)
+	{
+		// Workers outlive any FreeLibrary: pin the module so their code can never be unmapped under them.
+		HMODULE self;
+		GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, (LPCWSTR)(void *)dx_pool_set_threads, &self);
 	}
 	int made = 0;
 	for (int i = 0; i < n; i++)
@@ -107,6 +119,7 @@ void dx_pool_set_threads(int n)
 		P.handles[made++] = h;
 	}
 	P.threads = made;
+	InterlockedExchange(&P.busy, 0);
 }
 
 int dx_pool_threads(void) { return P.threads; }
@@ -148,11 +161,19 @@ int dx_pool_auto_threads(void)
 	return n;
 }
 
+// The serial path still hands out one call per chunk: some callers index per-chunk output by begin / chunk.
+static void run_serial(int count, int chunk, dx_range_fn fn, void *ctx)
+{
+	for (int b = 0; b < count; b += chunk) fn(ctx, b, count - b < chunk ? count : b + chunk, 0);
+}
+
 void dx_parallel_for(int count, int chunk, int minParallel, dx_range_fn fn, void *ctx)
 {
 	if (count <= 0) return;
-	if (P.threads == 0 || count < minParallel) { fn(ctx, 0, count, 0); return; }
 	if (chunk < 1) chunk = 1;
+	// The job slot is single: nested or concurrent calls run serially. Holding busy also keeps P.threads stable.
+	if (count < minParallel || InterlockedCompareExchange(&P.busy, 1, 0) != 0) { run_serial(count, chunk, fn, ctx); return; }
+	if (P.threads == 0) { run_serial(count, chunk, fn, ctx); InterlockedExchange(&P.busy, 0); return; }
 	LONG chunks = (count + chunk - 1) / chunk;
 	P.fn = fn; P.ctx = ctx; P.count = count; P.chunk = chunk;
 	P.remaining = chunks;
@@ -168,4 +189,5 @@ void dx_parallel_for(int count, int chunk, int minParallel, dx_range_fn fn, void
 		if ((++k & 63) == 0 && now_ticks() - t0 > yieldTicks) SwitchToThread();
 	}
 	MemoryBarrier();
+	InterlockedExchange(&P.busy, 0);
 }

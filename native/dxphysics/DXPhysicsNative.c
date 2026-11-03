@@ -4,8 +4,14 @@
 #include <stdlib.h>
 #include "dxpool.h"
 
+__declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA(const char *name, char *buffer, unsigned long size);
+void dx_diag_init(void);
+void dx_diag_thread(void);
+
 extern int dx_skip_threading, dx_par_independent, dx_par_solver, dx_last_colors, dx_par_collide, dx_par_record, dx_block_solver, dx_par_filter, dx_block_alternate;
 
+// Deferred dispose queue. It only ever holds bodies of the active space (g_space): Body_Dispose queues nothing else,
+// Space_Step drains it only for g_space, and Space_Create flushes it before a new space becomes active.
 int dx_defer_dispose = 1;
 static cpBody **g_dead; static int g_ndead, g_capdead;
 static void dx_compact(cpArray *arr) { int k = 0; for (int i = 0; i < arr->num; i++) { cpBody *b = (cpBody *)arr->arr[i]; if (!b->dx_dead) arr->arr[k++] = b; } for (int i = k; i < arr->num; i++) arr->arr[i] = NULL; arr->num = k; }
@@ -14,26 +20,46 @@ static void dx_dead_begin(cpSpace *space)
 	if (!g_ndead) return;
 	for (int i = 0; i < g_ndead; i++)
 	{
-		cpBody *body = g_dead[i]; if (body->space != space) continue;
+		cpBody *body = g_dead[i];
 		cpBool isStatic = (cpBodyGetType(body) == CP_BODY_TYPE_STATIC);
 		CP_BODY_FOREACH_SHAPE(body, shape) { cpSpatialIndexRemove(isStatic ? space->staticShapes : space->dynamicShapes, shape, shape->hashid); shape->space = NULL; }
 	}
 	dx_compact(space->dynamicBodies); dx_compact(space->staticBodies);
-	for (int i = 0; i < g_ndead; i++) if (g_dead[i]->space == space) g_dead[i]->space = NULL;
+	for (int i = 0; i < g_ndead; i++) g_dead[i]->space = NULL;
 }
 static void dx_dead_end(void)
 {
-	int k = 0;
 	for (int i = 0; i < g_ndead; i++)
 	{
 		cpBody *body = g_dead[i];
-		if (body->space != NULL) { g_dead[k++] = body; continue; }
 		cpShape *shape = body->shapeList;
 		while (shape) { cpShape *next = shape->next; shape->body = NULL; cpShapeFree(shape); shape = next; }
 		body->shapeList = NULL;
 		cpBodyFree(body);
 	}
-	g_ndead = k;
+	g_ndead = 0;
+}
+
+static void dx_dispose_now(cpBody *body)
+{
+	cpShape *shape;
+	while ((shape = body->shapeList) != NULL) { cpSpaceRemoveShape(body->space, shape); cpShapeFree(shape); }
+	cpSpaceRemoveBody(body->space, body);
+	cpBodyFree(body);
+}
+
+// The previous space is never stepped again once a new one is created, so its queued bodies are removed right away.
+// Their userData is cleared first so separation callbacks for an unloaded level never reach the game.
+static void dx_dead_flush(void)
+{
+	for (int i = 0; i < g_ndead; i++)
+	{
+		cpBody *body = g_dead[i];
+		body->userData = NULL;
+		CP_BODY_FOREACH_SHAPE(body, s) s->userData = NULL;
+		dx_dispose_now(body);
+	}
+	g_ndead = 0;
 }
 
 #define DX_EXPORT __declspec(dllexport)
@@ -54,6 +80,7 @@ void dx_diag_call(unsigned id, void *p, float a, float b, float c, float d);
 #define DXD(id, p, a, b, c, d) dx_diag_call((id), (void *)(p), (float)(a), (float)(b), (float)(c), (float)(d))
 void dx_check_patches(const char *where);
 static int g_steps_seen;
+static int g_threads_explicit;
 
 #ifdef DX_PROFILE
 #include <windows.h>
@@ -88,6 +115,11 @@ DX_EXPORT void Space_Step(cpSpace *space, float timeStep)
 {
 	DXD(1, space, timeStep, g_ndead, 0, 0);
 	if (g_steps_seen < 200 && (++g_steps_seen % 20) == 1) dx_check_patches("Space_Step");
+	// cpSpaceStep does nothing for dt == 0, so the arbiter filter that drops pairs of dead shapes would not run either:
+	// keep the dead bodies queued until a real step instead of freeing memory the cached arbiters still point to.
+	if (timeStep == 0.0f) return;
+	dx_diag_thread();
+	if (space != g_space) { cpSpaceStep(space, timeStep); return; }
 	dx_dead_begin(space); cpSpaceStep(space, timeStep); dx_dead_end();
 }
 
@@ -103,9 +135,17 @@ DX_EXPORT cpSpace *Space_Create(float gravityX, float gravityY, int iterations)
 	h->separateFunc = DX_Separate;
 	space->damping = 0.001f;
 	space->collisionSlop = 0.1f;
+	dx_dead_flush();
 	g_space = space;
+	dx_diag_init();
 
-	{ const char *t = getenv("DX_PHYS_THREADS"); dx_pool_set_threads(t ? atoi(t) : dx_pool_auto_threads()); }
+	if (!g_threads_explicit)
+	{
+		char t[32]; unsigned long len = GetEnvironmentVariableA("DX_PHYS_THREADS", t, sizeof t);
+		int n = -1;
+		if (len > 0 && len < sizeof t) { char *end; long v = strtol(t, &end, 10); if (end != t && *end == 0 && v >= 0) n = (int)v; }
+		dx_pool_set_threads(n >= 0 ? n : dx_pool_auto_threads());
+	}
 	return space;
 }
 
@@ -270,27 +310,28 @@ DX_EXPORT void Body_Dispose(cpBody *body)
 {
 	DXD(7, body, body->dx_dead, g_ndead, 0, 0);
 	if (body->dx_dead) return;
-	cpSpace *space;
-	cpShape *shape;
 	DXT0();
 
-	if (dx_defer_dispose && body->space)
+	// Deferred removal skips upstream's wake-up, constraint and sleeping-component cleanup, so only use it for
+	// bodies of the active space that have none of those.
+	if (dx_defer_dispose && body->space && body->space == g_space && !body->constraintList && !cpBodyIsSleeping(body))
 	{
-		CP_BODY_FOREACH_SHAPE(body, s) { s->filter.categories = 0; s->filter.mask = 0; }
-		body->dx_dead = 1;
-		if (g_ndead == g_capdead) { g_capdead = g_capdead ? g_capdead * 2 : 1024; g_dead = (cpBody **)realloc(g_dead, g_capdead * sizeof(cpBody *)); }
-		g_dead[g_ndead++] = body;
-		DXT1(10);
-		return;
+		if (g_ndead == g_capdead)
+		{
+			int cap = g_capdead ? g_capdead * 2 : 1024;
+			cpBody **grown = (cpBody **)realloc(g_dead, cap * sizeof(cpBody *));
+			if (grown) { g_dead = grown; g_capdead = cap; }
+		}
+		if (g_ndead < g_capdead)
+		{
+			CP_BODY_FOREACH_SHAPE(body, s) { s->filter.categories = 0; s->filter.mask = 0; }
+			body->dx_dead = 1;
+			g_dead[g_ndead++] = body;
+			DXT1(10);
+			return;
+		}
 	}
-	while ((shape = body->shapeList) != NULL)
-	{
-		space = body->space;
-		cpSpaceRemoveShape(space, shape);
-		cpShapeFree(shape);
-	}
-	cpSpaceRemoveBody(body->space, body);
-	cpBodyFree(body);
+	dx_dispose_now(body);
 	DXT1(10);
 }
 
@@ -323,7 +364,7 @@ DX_EXPORT void Body_SetAngle(cpBody *body, float angle)
 {
 	DXD(9, body, angle, 0, 0, 0);
 	cpBodySetAngle(body, angle);
-	cpSpaceReindexShapesForBody(g_space, body);
+	cpSpaceReindexShapesForBody(body->space ? body->space : g_space, body);
 }
 DX_EXPORT float Body_GetAngle(cpBody *body) { return body->a; }
 DX_EXPORT void Body_SetPosition(cpBody *body, float x, float y) { DXD(10, body, x, y, 0, 0); cpBodySetPosition(body, cpv(x, y)); }
@@ -386,7 +427,7 @@ DX_EXPORT void DX_ProfileReset(void) { extern volatile long long dx_ray_stat[6];
 
 DX_EXPORT int DX_SetOption(int name, int value)
 {
-	if (name == 0) { dx_pool_set_threads(value); return dx_pool_threads(); }
+	if (name == 0) { g_threads_explicit = 1; dx_pool_set_threads(value); return dx_pool_threads(); }
 	if (name == 1) { int o = dx_par_independent; dx_par_independent = value; return o; }
 	if (name == 2) { int o = dx_skip_threading; dx_skip_threading = value; return o; }
 	if (name == 3) { int o = dx_par_solver; dx_par_solver = value; return o; }

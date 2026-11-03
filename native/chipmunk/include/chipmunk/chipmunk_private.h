@@ -633,12 +633,17 @@ bias_coef(cpFloat errorBias, cpFloat dt)
 
 
 typedef struct cpContactBufferHeader cpContactBufferHeader;
+
+// Contact ring used by parallel arbiter recording (one slot per step, power of two).
+#define DX_CBUF_RING 4
 typedef void (*cpSpaceArbiterApplyImpulseFunc)(cpArbiter *arb);
 
 struct cpSpace {
 	int iterations;
 
 	int dx_unthreaded;
+	struct cpContact *dx_cbuf[DX_CBUF_RING];
+	int dx_cbcap[DX_CBUF_RING];
 
 	cpVect gravity;
 	cpFloat damping;

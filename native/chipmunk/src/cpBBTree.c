@@ -22,7 +22,6 @@
 #include "stdio.h"
 
 #include "chipmunk/chipmunk_private.h"
-static int dx_bbtree_requery;
 #ifdef DX_PROFILE
 extern double dx_prof[32]; double dx_now(void);
 #endif
@@ -44,6 +43,7 @@ struct cpBBTree {
 	cpArray *allocatedBuffers;
 
 	cpTimestamp stamp;
+	int dx_requery;
 };
 
 struct Node {
@@ -560,6 +560,7 @@ cpBBTreeInit(cpBBTree *tree, cpSpatialIndexBBFunc bbfunc, cpSpatialIndex *static
 	tree->allocatedBuffers = cpArrayNew(0);
 
 	tree->stamp = 0;
+	tree->dx_requery = 0;
 
 	return (cpSpatialIndex *)tree;
 }
@@ -637,7 +638,7 @@ cpBBTreeReindexQuery(cpBBTree *tree, cpSpatialIndexQueryFunc func, void *data)
 #ifdef DX_PROFILE
 	double _l1 = dx_now(); dx_prof[14] += _l1 - _l0;
 #endif
-	if(dx_bbtree_requery){ dx_bbtree_requery = 0; cpHashSetEach(tree->leaves, (cpHashSetIteratorFunc)dx_requery_leaf, tree); }
+	if(tree->dx_requery){ tree->dx_requery = 0; cpHashSetEach(tree->leaves, (cpHashSetIteratorFunc)dx_requery_leaf, tree); }
 
 	cpSpatialIndex *staticIndex = tree->spatialIndex.staticIndex;
 	Node *staticRoot = (staticIndex && staticIndex->klass == Klass() ? ((cpBBTree *)staticIndex)->root : NULL);
@@ -659,7 +660,7 @@ void cpBBTreeDXUpdateLeaves(cpSpatialIndex *index)
 	dx_fat_on = dx_fat_enabled;
 	cpHashSetEach(tree->leaves, (cpHashSetIteratorFunc)LeafUpdateWrap, tree);
 	IncrementStamp(tree);
-	dx_bbtree_requery = 1;
+	tree->dx_requery = 1;
 }
 
 static void

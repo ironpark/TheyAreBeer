@@ -380,7 +380,7 @@ void cpHashSetDXReserve(cpHashSet *set, unsigned int extra);
 void cpHashSetDXInsertNew(cpHashSet *set, cpHashValue hash, void *elt);
 int dx_par_record = 1;
 static struct dx_rec **dx_R; static cpArbiter **dx_A; static unsigned char *dx_flag; static int dx_Rcap;
-static struct cpContact *dx_cbuf[4]; static int dx_cbcap[4];
+// The contact ring lives in cpSpace (dx_cbuf/dx_cbcap), so several spaces never share it.
 
 static void dx_rp_find(void *c, int b, int e, int w)
 {
@@ -394,14 +394,14 @@ static void dx_rp_find(void *c, int b, int e, int w)
 static void dx_rp_update(void *c, int b, int e, int w)
 {
 	cpSpace *space = (cpSpace *)c;
-	struct cpContact *buf = dx_cbuf[space->stamp & 3];
+	struct cpContact *buf = space->dx_cbuf[space->stamp & (DX_CBUF_RING - 1)];
 	for(int k=b; k<e; k++){
 		struct dx_rec *r = dx_R[k]; cpArbiter *arb = dx_A[k];
 		struct cpCollisionInfo info = r->info; struct cpContact *dst = buf + 2*k;
 		for(int i=0; i<info.count; i++) dst[i] = r->contacts[i];
 		info.arr = dst;
 		cpArbiterUpdate(arb, &info, space);
-		if(arb->handler == &space->defaultHandler){
+		if(arb->handler == &space->defaultHandler && !space->usesWildcards){
 			cpShape *a = r->a, *bb = r->b;
 			int push = (arb->state != CP_ARBITER_STATE_IGNORE) && !(a->sensor || bb->sensor) && !(a->body->m == INFINITY && bb->body->m == INFINITY);
 			if(!push){ arb->contacts = NULL; arb->count = 0; if(arb->state != CP_ARBITER_STATE_IGNORE) arb->state = CP_ARBITER_STATE_NORMAL; }
@@ -415,8 +415,13 @@ static void dx_record_parallel(cpSpace *space, int chunks, int m)
 	if(m > dx_Rcap){ dx_Rcap = m*2; dx_R = (struct dx_rec **)cprealloc(dx_R, dx_Rcap*sizeof(*dx_R)); dx_A = (cpArbiter **)cprealloc(dx_A, dx_Rcap*sizeof(*dx_A)); dx_flag = (unsigned char *)cprealloc(dx_flag, dx_Rcap); }
 	int k = 0;
 	for(int ch=0; ch<chunks; ch++){ struct dx_chunk_out *o = &dx_outs[ch]; for(int i=0; i<o->num; i++) dx_R[k++] = &o->recs[i]; }
-	int g = (int)(space->stamp & 3);
-	if(2*m > dx_cbcap[g]){ dx_cbcap[g] = 4*m; dx_cbuf[g] = (struct cpContact *)cprealloc(dx_cbuf[g], dx_cbcap[g]*sizeof(struct cpContact)); }
+	int g = (int)(space->stamp & (DX_CBUF_RING - 1));
+	if(2*m > space->dx_cbcap[g]){
+		// Like upstream contact buffers, a slot is never freed while the space lives: arbiters kept across steps
+		// may still point into it. The old block goes to allocatedBuffers, which cpSpaceDestroy frees.
+		if(space->dx_cbuf[g]) cpArrayPush(space->allocatedBuffers, space->dx_cbuf[g]);
+		space->dx_cbcap[g] = 4*m; space->dx_cbuf[g] = (struct cpContact *)cpcalloc(space->dx_cbcap[g], sizeof(struct cpContact));
+	}
 	dx_parallel_for(m, 256, 0, dx_rp_find, space);
 	int newc = 0; for(int i=0; i<m; i++) if(!dx_A[i]) newc++;
 	if(newc){
@@ -485,18 +490,24 @@ static int dx_collide(cpSpace *space)
 		}
 	}
 
-	if(!(maxx - minx < 4096.0f && maxy - miny < 4096.0f)) return 0;
+	if(n < 2048 || !(maxx - minx < 4096.0f && maxy - miny < 4096.0f)) return 0;
 	dx_gx0 = (int)floorf(minx / DX_CELL); dx_gy0 = (int)floorf(miny / DX_CELL);
 	dx_gw = (int)floorf(maxx / DX_CELL) - dx_gx0 + 1; dx_gh = (int)floorf(maxy / DX_CELL) - dx_gy0 + 1;
 	int cells = dx_gw*dx_gh;
-	if(cells + 1 > dx_cell_cap){ dx_cell_cap = (cells + 1)*2; dx_cell_start = (int *)cprealloc(dx_cell_start, dx_cell_cap*sizeof(int)); }
-	memset(dx_cell_start, 0, (cells + 1)*sizeof(int));
-	int items = 0;
+	if(cells > (1 << 22)) return 0;
+	long long total = 0;
 	for(int i=0; i<n; i++){
 		cpBB bb = dx_cshapes[i]->bb;
-		int x0 = (int)floorf(bb.l / DX_CELL) - dx_gx0, y0 = (int)floorf(bb.b / DX_CELL) - dx_gy0, x1 = (int)floorf(bb.r / DX_CELL) - dx_gx0, y1 = (int)floorf(bb.t / DX_CELL) - dx_gy0;
-		dx_cx0[i] = x0 + dx_gx0; dx_cy0[i] = y0 + dx_gy0; dx_cx1[i] = x1 + dx_gx0; dx_cy1[i] = y1 + dx_gy0;
-		for(int gx=x0; gx<=x1; gx++) for(int gy=y0; gy<=y1; gy++){ dx_cell_start[gx*dx_gh + gy + 1]++; items++; }
+		dx_cx0[i] = (int)floorf(bb.l / DX_CELL); dx_cy0[i] = (int)floorf(bb.b / DX_CELL); dx_cx1[i] = (int)floorf(bb.r / DX_CELL); dx_cy1[i] = (int)floorf(bb.t / DX_CELL);
+		total += (long long)(dx_cx1[i] - dx_cx0[i] + 1)*(dx_cy1[i] - dx_cy0[i] + 1);
+	}
+	if(total > (1 << 26)) return 0;
+	int items = (int)total;
+	if(cells + 1 > dx_cell_cap){ dx_cell_cap = (cells + 1)*2; dx_cell_start = (int *)cprealloc(dx_cell_start, dx_cell_cap*sizeof(int)); }
+	memset(dx_cell_start, 0, (cells + 1)*sizeof(int));
+	for(int i=0; i<n; i++){
+		int x0 = dx_cx0[i] - dx_gx0, y0 = dx_cy0[i] - dx_gy0, x1 = dx_cx1[i] - dx_gx0, y1 = dx_cy1[i] - dx_gy0;
+		for(int gx=x0; gx<=x1; gx++) for(int gy=y0; gy<=y1; gy++) dx_cell_start[gx*dx_gh + gy + 1]++;
 	}
 	for(int c=0; c<cells; c++) dx_cell_start[c+1] += dx_cell_start[c];
 	if(items > dx_items_cap){ dx_items_cap = items*2; dx_cell_items = (int *)cprealloc(dx_cell_items, dx_items_cap*sizeof(int)); }
@@ -521,7 +532,7 @@ static int dx_collide(cpSpace *space)
 #endif
 
 	int mrec = 0; for(int ch=0; ch<chunks; ch++) mrec += dx_outs[ch].num;
-	if(dx_par_record && mrec >= 4096) dx_record_parallel(space, chunks, mrec); else
+	if(dx_par_record && mrec >= 4096 && space->collisionPersistence < DX_CBUF_RING) dx_record_parallel(space, chunks, mrec); else
 	for(int ch=0; ch<chunks; ch++){
 		struct dx_chunk_out *o = &dx_outs[ch];
 		for(int k=0; k<o->num; k++){
@@ -550,7 +561,7 @@ static int dx_arb_classify(cpArbiter *arb, cpSpace *space)
 	if(arb->a->space == NULL || arb->b->space == NULL){ int sep = (arb->state != CP_ARBITER_STATE_CACHED); if(sep) arb->state = CP_ARBITER_STATE_INVALIDATED; return 1 | 4 | (sep ? 2 : 0); }
 	cpTimestamp ticks = space->stamp - arb->stamp;
 	cpBody *a = arb->body_a, *b = arb->body_b;
-	if((cpBodyGetType(a) == CP_BODY_TYPE_STATIC || cpBodyIsSleeping(a)) && (cpBodyGetType(b) == CP_BODY_TYPE_STATIC || cpBodyIsSleeping(b))) return 0;
+	if((cpBodyGetType(a) == CP_BODY_TYPE_STATIC || cpBodyIsSleeping(a)) && (cpBodyGetType(b) == CP_BODY_TYPE_STATIC || cpBodyIsSleeping(b)))return 0;
 	int act = 0;
 	if(ticks >= 1 && arb->state != CP_ARBITER_STATE_CACHED){ arb->state = CP_ARBITER_STATE_CACHED; act |= 2; }
 	if(ticks >= space->collisionPersistence){ arb->contacts = NULL; arb->count = 0; act |= 1; }
@@ -671,14 +682,21 @@ static int dx_build_blocks(cpSpace *space, cpArray *arbiters)
 	int n = arbiters->num;
 	cpArray *bodies = space->dynamicBodies;
 	float minx = INFINITY, miny = INFINITY, maxx = -INFINITY, maxy = -INFINITY;
-	float maxd = 0.0f;
+	float maxr = 0.0f;
 	for(int i=0; i<bodies->num; i++){
 		cpBody *body = (cpBody *)bodies->arr[i]; cpVect p = body->p;
 		if(p.x < minx) minx = p.x; if(p.y < miny) miny = p.y; if(p.x > maxx) maxx = p.x; if(p.y > maxy) maxy = p.y;
-		if(dx_dynamic(body)) CP_BODY_FOREACH_SHAPE(body, shape){ if(shape->sensor) continue; float d = shape->bb.r - shape->bb.l, d2 = shape->bb.t - shape->bb.b; if(d2 > d) d = d2; if(d > maxd) maxd = d; }
+		if(dx_dynamic(body)) CP_BODY_FOREACH_SHAPE(body, shape){
+			if(shape->sensor) continue;
+			// Largest per-axis reach from the body position to its shape's box edge.
+			float r0 = p.x - shape->bb.l, r1 = shape->bb.r - p.x, r2 = p.y - shape->bb.b, r3 = shape->bb.t - p.y;
+			if(r0 > maxr) maxr = r0; if(r1 > maxr) maxr = r1; if(r2 > maxr) maxr = r2; if(r3 > maxr) maxr = r3;
+		}
 	}
-	if(!(maxx - minx < 1e5f && maxy - miny < 1e5f)) return 0;
-	float bs = 2.0f*maxd + 0.5f; if(bs < 4.0f) bs = 4.0f; dx_block_size = bs;
+	if(!(maxx - minx < 1e5f && maxy - miny < 1e5f && isfinite(maxr))) return 0;
+	// Arbiters are keyed by one dynamic body's position; two contacts sharing a body B keep their keys within 4*maxr per axis,
+	// so a block wider than that keeps same-phase blocks from ever touching the same body.
+	float bs = 4.0f*maxr + 0.5f; if(bs < 4.0f) bs = 4.0f; dx_block_size = bs;
 	int bw = (int)((maxx - minx) / bs) + 2, bh = (int)((maxy - miny) / bs) + 2, nb = bw*bh;
 	if(nb > 4000000) return 0;
 	if(n > dx_bkcap){ dx_bkcap = n*2; dx_bkey = (int *)cprealloc(dx_bkey, dx_bkcap*sizeof(int)); }

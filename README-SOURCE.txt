@@ -6,11 +6,11 @@ TAB 최적화 패치 — 소스 (source)
 (소스의 주석은 지웠습니다. 각 파일이 하는 일은 아래에 정리했습니다.)
 
 ■ 빌드
-  - 물리 DLL: Visual Studio 2019/2022(또는 Build Tools)의 「C++ 데스크톱 개발」 → powershell -ExecutionPolicy Bypass -File build-native.ps1
+  - 물리 DLL: Visual Studio 2019/2022(또는 Build Tools)의 「C++ 데스크톱 개발」 → powershell -ExecutionPolicy Bypass -File scripts\build-native.ps1
       결과 native\out\DXPhysicsNative.dll (+ 비교 도구 compare.exe)
   - 엔진 모드: 위 도구의 MSBuild(Roslyn C# 컴파일러) + 내 TABModLoader 설치에서 가져온 참조 파일 3개
       (TABModLoader 가 고친 TheyAreBillions.exe, 로더 Lib 폴더의 DXVision.dll · 0Harmony.dll)를 한 폴더에 모은 뒤
-      powershell -ExecutionPolicy Bypass -File build-mod.ps1 -RefDir <그 폴더>   → mod\out\TABPerf.dll
+      powershell -ExecutionPolicy Bypass -File scripts\build-mod.ps1 -RefDir <그 폴더>   → mod\out\TABPerf.dll
 
 ■ 물리 DLL (native)
   - chipmunk\        Chipmunk2D 7.0.0(MIT, chipmunk\LICENSE.txt). 원작 게임 DLL 과 같은 엔진이며 바꾼 곳:
@@ -52,6 +52,6 @@ TAB 최적화 패치 — 소스 (source)
 
 
 English: this folder contains the patch's own source code only (comments removed; see the file roles above).
-Build the physics DLL with build-native.ps1 (MSVC x64) and the engine mod with build-mod.ps1 -RefDir <folder with your TABModLoader-patched
+Build the physics DLL with scripts\build-native.ps1 (MSVC x64) and the engine mod with scripts\build-mod.ps1 -RefDir <folder with your TABModLoader-patched
 TheyAreBillions.exe, DXVision.dll and 0Harmony.dll>. Keep dx_text_pad in dxdiag.c: TABModLoader overwrites 5 bytes at DLL base + 0x13B3.
 Patch code: MIT (LICENSE.txt). Chipmunk2D: MIT. Unofficial; not affiliated with Numantian Games.

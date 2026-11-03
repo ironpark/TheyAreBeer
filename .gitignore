@@ -1,0 +1,26 @@
+# Build script outputs (binaries, object files, and build logs)
+/mod/out/
+/native/out/
+
+# Local game and TABModLoader references
+TheyAreBillions.exe
+DXVision.dll
+0Harmony.dll
+
+# Visual Studio local state
+.vs/
+*.suo
+*.user
+*.VC.db
+*.VC.opendb
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini

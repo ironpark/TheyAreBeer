@@ -28,6 +28,7 @@
  */
 #include <windows.h>
 #include <intrin.h>
+#include <immintrin.h>
 #include <delayimp.h>
 #include <math.h>
 #include <stddef.h>
@@ -107,6 +108,8 @@ typedef struct {
 	int *cs, *ci;             /* cell start (gw*gh+1), cell items */
 	int *big; int nbig;       /* items spanning too many cells */
 	unsigned *cat; LONG catgen;   /* category per item and g_catgen when they were read (valid while it is unchanged) */
+	float *ex0, *ey0, *ex1, *ey1; unsigned *ecat;   /* box and category per cell entry (ci order): a column's cells are
+	                                                   one contiguous run, scanned without going through the item */
 } DxIndex;
 static volatile LONG g_catgen;   /* bumped on every category change of an indexed shape */
 
@@ -123,6 +126,7 @@ static SRWLOCK g_world = SRWLOCK_INIT, g_index = SRWLOCK_INIT;
    (DX_SetOption(356, 1); the bench turns it on). */
 static int g_diag;
 static volatile LONG64 g_lk[13];
+static int g_ray_simd;   /* AVX2 entry filter in the ray walk (CPU and OS support it, DX_RAPIER_RAYSIMD not 0) */
 static int g_ray_walk = 1;   /* DX_RAPIER_RAYWALK=0: the box walk (index_query); 2: both, mismatches counted (g_lk 10, 11) */
 typedef struct __declspec(align(64)) { volatile LONG64 v[6]; } DxQStat;   /* one cache line per query kind */
 static DxQStat g_qs[6];   /* see "exports: queries" */
@@ -438,7 +442,8 @@ static void sync_flags(DxBody *b)
 static void index_free(DxIndex *x)
 {
 	if (!x) return;
-	free(x->it); free(x->bb); free(x->ix0); free(x->iy0); free(x->ix1); free(x->iy1); free(x->cs); free(x->ci); free(x->big); free(x->cat); free(x);
+	free(x->it); free(x->bb); free(x->ix0); free(x->iy0); free(x->ix1); free(x->iy1); free(x->cs); free(x->ci); free(x->big); free(x->cat);
+	free(x->ex0); free(x->ey0); free(x->ex1); free(x->ey1); free(x->ecat); free(x);
 }
 /* The index is built in parallel passes over fixed blocks of shapes and items. The result is the same as one serial
    pass: live shapes keep their order, items are in shape order, and each cell lists its items in ascending order. */
@@ -519,6 +524,15 @@ static void idx_strip(struct idxjob *j, int part, int fill)
 }
 static void idx_count(void *ctx, int begin, int end, int worker) { (void)worker; for (int k = begin; k < end; k++) idx_strip((struct idxjob *)ctx, k, 0); }
 static void idx_fill(void *ctx, int begin, int end, int worker) { (void)worker; for (int k = begin; k < end; k++) idx_strip((struct idxjob *)ctx, k, 1); }
+static void idx_entries(void *ctx, int begin, int end, int worker)
+{
+	(void)worker; DxIndex *x = ((struct idxjob *)ctx)->x;
+	for (int k = begin; k < end; k++)
+	{
+		int i = x->ci[k]; const float *bb = &x->bb[4 * i];
+		x->ex0[k] = bb[0]; x->ey0[k] = bb[1]; x->ex1[k] = bb[2]; x->ey1[k] = bb[3]; x->ecat[k] = x->cat[i];
+	}
+}
 static DxIndex *index_build(void)
 {
 	DxIndex *x = (DxIndex *)calloc(1, sizeof(DxIndex)); if (!x) abort();
@@ -570,6 +584,12 @@ static DxIndex *index_build(void)
 	if (!x->ci || !j.fill) abort();
 	dx_parallel_for(IDX_PARTS, 1, n >= 8192 ? 2 : IDX_PARTS + 1, idx_fill, &j);
 	free(j.fill);
+	int ne = x->cs[cells];
+	x->ex0 = (float *)malloc(sizeof(float) * ((size_t)ne + 1)); x->ey0 = (float *)malloc(sizeof(float) * ((size_t)ne + 1));
+	x->ex1 = (float *)malloc(sizeof(float) * ((size_t)ne + 1)); x->ey1 = (float *)malloc(sizeof(float) * ((size_t)ne + 1));
+	x->ecat = (unsigned *)malloc(sizeof(unsigned) * ((size_t)ne + 1));
+	if (!x->ex0 || !x->ey0 || !x->ex1 || !x->ey1 || !x->ecat) abort();
+	dx_parallel_for(ne, 4096, 16384, idx_entries, &j);
 	return x;
 }
 typedef void (*dx_hit_fn)(DxShape *s, const float *bb, void *ctx);
@@ -811,6 +831,7 @@ DX_EXPORT void *Space_Create(float gravityX, float gravityY, int iterations)
 	g_sleep = env_int("DX_RAPIER_SLEEP", 0, 1, 1);
 	g_soft_ccd = env_float("DX_RAPIER_SOFTCCD", 0.0f, 100.0f, 0.0f);
 	g_ray_walk = env_int("DX_RAPIER_RAYWALK", 0, 2, 1);
+	g_ray_simd = env_int("DX_RAPIER_RAYSIMD", 0, 1, 1) && cpu_simd() >= SIMD_AVX2;
 	g_ccd_split = env_int("DX_RAPIER_CCD_SPLIT", 0, 1, 0);
 	g_ccd_hardcat = (unsigned)env_int("DX_RAPIER_CCD_HARDCAT", 1, 0x7fffffff, 0x200000);
 	g_ccd_split_soft = env_float("DX_RAPIER_SOFTCCD", 0.0f, 100.0f, 1.0f);
@@ -903,9 +924,12 @@ static void pull_body(DxBody *b, const struct R2RigidBodyState *st)
 }
 
 struct pulljob { unsigned stamp; };
+/* Each worker reads its own block of states: the bindings' world gate lets reads overlap, and their error state is
+   per thread. A block whose read fails is not pulled (as the whole read failing was before). */
 static void pull_range(void *ctx, int begin, int end, int worker)
 {
-	(void)worker; unsigned stamp = ((struct pulljob *)ctx)->stamp;
+	(void)worker; unsigned stamp = ((struct pulljob *)ctx)->stamp; size_t n = (size_t)(end - begin);
+	if (r2RigidBodyReadStates(g_rw, g_mh + begin, n, g_ms + begin, n) != n) { for (int i = begin; i < end; i++) g_moving[i] = NULL; return; }
 	for (int i = begin; i < end; i++)
 	{
 		DxBody *b = (DxBody *)(uintptr_t)g_ms[i].userData.low;
@@ -1061,7 +1085,7 @@ DX_EXPORT void Space_Step(void *space, float timeStep)
 	g_ms = (struct R2RigidBodyState *)grow(g_ms, &g_capms, (int)na + 1, sizeof(struct R2RigidBodyState));
 	g_moving = (DxBody **)grow(g_moving, &g_capmoving, (int)na + 1, sizeof(DxBody *));
 	int nm = 0;
-	if (na && r2RigidBodyReadStates(g_rw, g_mh, na, g_ms, na) == na)
+	if (na)
 	{
 		/* active handles are distinct, so each record is written by one worker; compact in order afterwards */
 		struct pulljob j; j.stamp = stamp; dx_parallel_for((int)na, 1024, 8192, pull_range, &j);
@@ -1272,6 +1296,36 @@ static void ray_try(struct qray *q, DxShape *s, const float *bb, const float *qb
 {
 	if (!s->dead && bb_hit(bb, qb) && query_pass(s, mask)) { q->hits++; ray_take(q, s, key); }
 }
+/* Entries [k0, k1) whose box overlaps qb and (catok) whose category passes the mask, written to out; returns how many.
+   The AVX2 form tests 8 entries per step. MSVC emits VEX code for the intrinsics without /arch:AVX2; it runs only
+   when cpu_simd() found AVX2. */
+static int ray_filter_scalar(const DxIndex *x, int k0, int k1, const float *qb, unsigned mask, int catok, int *out)
+{
+	int n = 0;
+	for (int k = k0; k < k1; k++)
+		if (x->ex0[k] <= qb[2] && qb[0] <= x->ex1[k] && x->ey0[k] <= qb[3] && qb[1] <= x->ey1[k] && (!catok || (x->ecat[k] & mask))) out[n++] = k;
+	return n;
+}
+static int ray_filter_avx2(const DxIndex *x, int k0, int k1, const float *qb, unsigned mask, int catok, int *out)
+{
+	int n = 0, k = k0;
+	__m256 l = _mm256_set1_ps(qb[0]), b = _mm256_set1_ps(qb[1]), r = _mm256_set1_ps(qb[2]), t = _mm256_set1_ps(qb[3]);
+	__m256i m = _mm256_set1_epi32((int)mask), z = _mm256_setzero_si256();
+	for (; k + 8 <= k1; k += 8)
+	{
+		__m256 hit = _mm256_and_ps(_mm256_and_ps(_mm256_cmp_ps(_mm256_loadu_ps(x->ex0 + k), r, _CMP_LE_OQ), _mm256_cmp_ps(l, _mm256_loadu_ps(x->ex1 + k), _CMP_LE_OQ)),
+		                           _mm256_and_ps(_mm256_cmp_ps(_mm256_loadu_ps(x->ey0 + k), t, _CMP_LE_OQ), _mm256_cmp_ps(b, _mm256_loadu_ps(x->ey1 + k), _CMP_LE_OQ)));
+		unsigned bits = (unsigned)_mm256_movemask_ps(hit);
+		if (bits && catok)
+		{
+			__m256i none = _mm256_cmpeq_epi32(_mm256_and_si256(_mm256_loadu_si256((const __m256i *)(x->ecat + k)), m), z);
+			bits &= ~(unsigned)_mm256_movemask_ps(_mm256_castsi256_ps(none));
+		}
+		while (bits) { unsigned long j; _BitScanForward(&j, bits); bits &= bits - 1; out[n++] = k + (int)j; }
+	}
+	_mm256_zeroupper();
+	return n + ray_filter_scalar(x, k, k1, qb, mask, catok, out + n);
+}
 static int index_ray_first(const float *qb, struct qray *q, unsigned mask)
 {
 	DxIndex *x = g_idx; int cand = 0;
@@ -1306,17 +1360,16 @@ static int index_ray_first(const float *qb, struct qray *q, unsigned mask)
 				}
 				int r0 = cell_of(ylo, cell, x->gy0), r1 = cell_of(yhi, cell, x->gy0);
 				if (r0 < ry0) r0 = ry0; if (r1 > ry1) r1 = ry1;
-				for (int gy = r0; gy <= r1; gy++)
+				if (r0 > r1) continue;
+				/* the column's cells r0..r1 are one run of entries; filter it in chunks */
+				int k0 = x->cs[gx * x->gh + r0], k1 = x->cs[gx * x->gh + r1 + 1];
+				cand += k1 - k0;
+				for (int kc = k0; kc < k1; kc += 256)
 				{
-					int c = gx * x->gh + gy;
-					cand += x->cs[c + 1] - x->cs[c];
-					for (int k = x->cs[c]; k < x->cs[c + 1]; k++)
+					int pass[256], np = (g_ray_simd ? ray_filter_avx2 : ray_filter_scalar)(x, kc, kc + 256 < k1 ? kc + 256 : k1, qb, mask, catok, pass);
+					for (int e = 0; e < np; e++)
 					{
-						int i = x->ci[k];
-						if (catok && !(x->cat[i] & mask)) continue;
-						const float *bb = &x->bb[4 * i];
-						if (!bb_hit(bb, qb)) continue;
-						DxShape *s = x->it[i];
+						int i = x->ci[pass[e]]; DxShape *s = x->it[i];
 						if (s->dead || s->pending || (!catok && !query_pass(s, mask))) continue;
 						int fx = x->ix0[i] > bx0 ? x->ix0[i] : bx0, fy = x->iy0[i] > by0 ? x->iy0[i] : by0;
 						q->hits++; ray_take(q, s, ((long long)(fx * x->gh + fy) << 32) | (unsigned)i);

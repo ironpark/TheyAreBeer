@@ -6,6 +6,65 @@
 
 - 전반적인 안정성 향상
 - 빌드 스크립트와 도구 개선
+- 물리 엔진 교체 기능 추가 ([Rapier](https://rapier.rs/) 2D)
+
+### Rapier 물리 엔진 (`native/rapier/`)
+
+#### 추가
+- `native/rapier/DXPhysicsRapier.c`: 게임이 부르는 물리 함수(원작 DLL과 같은 내보내기)를 Rapier 2D로 구현한 `DXPhysicsNative.dll`입니다. Rapier의 [공식 C 바인딩](https://github.com/dimforge/rapier/tree/master/bindings/c)(0.36.1+c.0, 커밋 고정)을 `rapier2d_ffi.dll`로 같은 폴더에 두고 지연 로드합니다.
+  - 충돌 필터는 원작 래퍼와 같은 규칙(분류/마스크 두 방향 중 하나라도 맞으면 충돌)입니다. Rapier 충돌 그룹의 OR 판정 모드로 엔진 안에서 처리하므로, 쌍마다 C 콜백을 부르지 않습니다.
+  - 충돌 시작·분리 콜백은 Rapier 충돌 이벤트로 만듭니다. 이벤트는 콜백 종류 1인 몸체에만 켜므로, 비용이 접촉 수가 아니라 접촉이 생기고 끊기는 횟수에 비례합니다.
+  - 충돌 시작 콜백이 `false`를 돌려준 쌍은 분리될 때까지 충격을 계산하지 않습니다. 이 판정에 쓰는 접촉 훅은 무시 중인 쌍이 있는 몸체에만 켭니다.
+  - 몸체 잠자기(sleep)를 켭니다. 게임이 같은 값을 다시 쓰면 Rapier에 넘기지 않고, 0에 가까운 속도는 몸체를 깨우지 않고 넘기므로, 멈춘 몸체가 계속 잠들어 있습니다. `DX_RAPIER_SLEEP=0`으로 끌 수 있습니다.
+  - CPUID·XGETBV로 CPU와 OS가 AVX2·FMA를 지원하는지 확인하고, 지원하면 AVX2 빌드를 불러옵니다(지연 로드 훅으로 같은 이름에 연결). `DX_RAPIER_AVX2=0`으로 끌 수 있고, AVX2 빌드 파일이 없으면 기본 빌드를 씁니다. 로그에는 `Rapier 대체본 (AVX2)`로 남습니다(`DX_SetOption(201)`).
+  - 단계가 끝난 뒤에는 Rapier의 활성 몸체 목록에 있는 몸체와, 직전 단계에 깨어 있던 몸체만 한 번에 읽어 옵니다.
+  - 위치·속도가 유한하지 않게 된 몸체를 Rapier가 격리(quarantine)하면, 마지막 정상 위치에서 정지한 상태로 바로 되살립니다. 게임이 넘긴 NaN·무한대 값은 Rapier에 넘기지 않습니다.
+  - 운동학(kinematic) 몸체에도 게임이 정한 속도를 넘깁니다.
+  - Chipmunk처럼 운동학–고정, 운동학–운동학 몸체 사이의 충돌 시작·분리도 알립니다. Rapier는 기본으로 이런 쌍을 건너뛰므로, 콜백 종류 1인 충돌체에만 활성 충돌 종류를 넓힙니다.
+  - 상자 모양은 둥근 상자 대신 테두리만큼 키운 일반 상자로 만듭니다. Rapier 문서상 둥근 상자는 충돌 계산이 느립니다(모서리만 0.05 각지고, 질의는 원래 각진 모서리로 계산합니다).
+  - 접촉 강성(접촉 스프링 주파수)을 게임의 단계 길이에 맞춥니다. Rapier 기본값은 1/60초 단계·하위 단계 4번 기준인데, 게임은 1/12초 단계·하위 단계 10번이라 하위 단계가 두 배 길어 같은 주파수가 두 배 딱딱해집니다. 하위 단계당 강성이 Rapier 기본과 같도록 주파수를 줄이면(지금은 30→15Hz, 고정 몸체 접촉 60→30Hz) 접촉이 덜 튀고 빨라집니다. 밀집 장면 25,000개에서 r2Step이 6~18% 빨라지고, 벽 밖으로 밀려난 몸체가 171/189/1539개에서 7/2/343개로 줄었습니다. `DX_RAPIER_SOFTNESS=0`으로 끌 수 있습니다.
+  - 단계 뒤 상태 가져오기와 질의 인덱스의 경계 상자 계산을 작업 스레드로 나눠 처리합니다. 실제 게임 6~7만 마리에서 두 구간 합계가 9.2 ms에서 7.5 ms로 줄었습니다. 격자 채우기는 순서를 지키려고 한 스레드로 둡니다.
+  - `DX_RAPIER_CCD=0`으로 연속 충돌 검사를 끌 수 있습니다(기본은 켬).
+  - 불러온 Rapier 라이브러리가 릴리스 빌드인지 확인합니다(`r2BuildProfile`, `DX_SetOption(202)`). 디버그 빌드면 로그에 경고를 남깁니다.
+  - 질의(영역·반경·가장 가까운 몸체·레이캐스트·남은 공간)는 단계마다 다시 만드는 자체 격자 인덱스로 처리합니다. 원작 래퍼와 같은 경계 상자 규칙을 쓰고, Rapier 내부 상태를 건드리지 않아 여러 스레드에서 동시에 불러도 안전합니다.
+  - 게임이 매 프레임 읽고 쓰는 위치·속도·힘은 몸체별 원자적 값으로 보관합니다. 그래서 잠금 없이 여러 스레드에서 쓸 수 있고, 다음 단계에 한꺼번에 반영합니다.
+  - 크래시 진단과 모드로더용 코드 패딩(`dx_text_pad`)은 Chipmunk 판과 같은 `dxdiag.c`를 씁니다.
+- Rapier 판 빌드(`scripts\build.ps1 -Target rapier`):
+  - Rapier 저장소를 고정 커밋으로 받고, 필요한 Rust 툴체인(1.99.1)이 없으면 설치합니다.
+  - [공식 문서](https://rapier.rs/docs/user_guides/c/getting_started_c)의 CMake 빌드(`-DRAPIER_DIMENSION=2 -DRAPIER_ENABLE_PARALLEL=ON -DRAPIER_SIMD_LANES=8`)로 C 바인딩을 빌드하고, CMake 통합 테스트(ctest)를 돌립니다.
+  - 같은 옵션으로 AVX2·FMA 빌드(`rapier2d_ffi_avx2.dll`)도 만듭니다. 빌드 PC가 AVX2를 지원하지 않으면 이 빌드의 테스트는 건너뜁니다.
+  - 패딩 위치를 검사합니다.
+- 엔진 모드: `engine.json`의 `"physicsEngine": "rapier"`로 Rapier 판을 씁니다. 로그에 쓰인 엔진을 남깁니다(`DX_SetOption(200)`이 2면 Rapier).
+- 성능 시험 모드(`mod/Bench.cs`, `engine.json`의 `"bench": true`):
+  - Ctrl+Shift+F9로 마지막 웨이브를 바로 발생시킵니다(`benchSwarmFactor`번, 기본 4).
+  - 1초마다 프레임·물리 단계 시간·좀비 수를 `bench.csv`에 남깁니다. Rapier 판이면 단계 구간별 시간도 남깁니다.
+  - `benchAuto`: 시작 화면에서 점수 배율 900% 생존 게임(시드 고정)을 자동으로 시작하고, 카메라를 게임의 최대 축소 폭으로 고정하고(`benchZoom`, 기본 `max`), 피해를 끈 뒤 마지막 웨이브를 발생시키고, 정해진 시간 뒤 게임을 끕니다. `benchThreads`로 물리 작업 스레드 수를 정할 수 있습니다.
+  - 설정마다 환경 변수(`TABPERF_BENCH`, `TABPERF_BENCH_AUTO`, `TABPERF_BENCH_SECONDS` 등, 엔진은 `TABPERF_ENGINE`)로도 켜고 끄거나 값을 줄 수 있고, 환경 변수가 `engine.json`보다 우선합니다(`mod/Settings.cs`). 기록 파일 경로는 `benchCsv`(`TABPERF_BENCH_CSV`)로 바꿀 수 있습니다.
+  - 줌: 전에는 레벨 시작 1~6초 동안 게임의 줌 목표값을 넣었는데, 시작 애니메이션 동안은 카메라 입력이 꺼져 있어 줌이 되지 않을 수 있었습니다. 이제 입력이 켜진 뒤 카메라 폭을 게임의 최대값으로 맞추고 유지합니다(시험에서 24 → 80).
+
+### 물리 DLL 연결과 설치
+
+#### 수정
+- **모드 폴더의 물리 DLL이 쓰이지 않던 문제**: 게임의 `[DllImport("DXPhysicsNative.dll")]`는 .NET Framework가 게임 폴더의 `DXPhysicsNative.dll`에 연결합니다. 그래서 엔진 모드가 모드 폴더의 대체본을 먼저 불러 두어도, 게임은 게임 폴더의 원작 DLL을 따로 불러와 썼습니다. TABModLoader도 네이티브 DLL은 처리하지 않습니다(모드 폴더의 `*.dll`을 .NET 어셈블리로만 열어 봄).
+  - `mod/PhysicsRedirect.cs`: 게임의 물리 선언 47개를 같은 시그니처·마샬링으로, 대체본의 전체 경로를 가리키는 P/Invoke로 실행 중에 다시 만듭니다. 이 선언을 부르는 게임 메서드(`DXPhysicBody`·`DXPhysicWorld`의 36개)의 호출 대상은 Harmony 트랜스파일러로 바꿉니다. 게임 파일은 바꾸지 않습니다.
+  - 게임 폴더 DLL의 함수가 대체본에 모두 있는지 PE 내보내기 표로 확인하고, 하나라도 없거나 패치가 실패하면 모두 되돌려 게임 폴더의 DLL을 씁니다. 두 DLL의 핸들이 섞이지 않도록 하기 위해서입니다.
+  - 실제 게임에서 Rapier와 Chipmunk 모두 확인했습니다. 시험이 끝날 때까지 게임 폴더의 물리 DLL은 불리지 않았고, 단계 시간은 대체본을 게임 폴더에 직접 넣었을 때와 같았습니다.
+- **로그의 물리 DLL 표시**: 게임이 실제로 부르는 DLL(연결한 대체본, 아니면 게임 폴더의 DLL)에서 `DX_SetOption`을 찾습니다. 전에는 모드가 불러 둔 DLL을 보고 표시해, 게임은 원작을 쓰는데 대체본으로 나올 수 있었습니다.
+
+#### 추가
+- 엔진은 모드 폴더의 `chipmunk\`, `rapier\` 하위 폴더에 둡니다. `engine.json`의 `physicsEngine`으로 `chipmunk`(기본)·`rapier`·`original`을 고릅니다. 고른 엔진을 쓸 수 없으면 Chipmunk 판, 그것도 안 되면 원작 DLL을 씁니다.
+- `scripts\install.ps1 [-Engine chipmunk|rapier|original] [-Uninstall]`: 모드와 빌드한 엔진을 `Mods\TABPerf`에 복사합니다. `-Engine`은 `engine.json`의 `physicsEngine`도 정합니다. 예전 설치가 남긴 `DXPhysicsNative.dll.orig`가 있으면 게임 폴더의 DLL을 원작으로 되돌리고, 모드 폴더 바로 아래의 물리 DLL은 지웁니다.
+
+### 스크립트 (`scripts/`)
+
+#### 변경
+- 빌드 스크립트 세 개(`build-native.ps1`, `build-rapier.ps1`, `build-mod.ps1`)를 `scripts\build.ps1` 하나로 합쳤습니다. `-Target chipmunk|harness|rapier|mod`(쉼표로 여러 개)로 고르고, 생략하면 모두 빌드합니다. 이때 비교 도구 빌드 실패는 경고로, Rapier 도구(git, cmake, rustup)가 없으면 건너뜁니다.
+- 공용 함수를 `scripts\lib\`로 나눴습니다. `game.ps1`은 게임 폴더 찾기·모드로더 패치 확인·해시, `toolchain.ps1`은 MSVC·csc 찾기·빌드 명령 실행·패딩 검사를 맡습니다. `setup.ps1`과 `install.ps1`의 중복 함수(해시, 로더 확인, 게임 폴더 확인)도 여기로 옮겼습니다.
+- 빌드 명령 실행(`Invoke-Cmd`)을 한 곳에서 처리합니다. 전에는 스크립트마다 오류 처리 방식(`$ErrorActionPreference` 복원 여부)이 달랐습니다.
+- Rapier CMake 옵션을 한 표에서 만들어, CMake 인자와 빌드 뒤 캐시 확인이 같은 값을 씁니다.
+
+#### 추가
+- `scripts\bench.ps1`: 게임 안 자동 성능 시험을 엔진별(`-Engine chipmunk,rapier,original`)·회차별(`-Runs`)로 돌리고, 실행별 CSV와 `summary.csv`를 `bench-out\`에 남깁니다. 설정은 환경 변수로 넘기고, 실행하는 동안만 게임 폴더에 `steam_appid.txt`를 둬 게임이 Steam을 거쳐 다시 시작되지 않게 합니다(다시 시작되면 환경 변수가 사라짐).
 
 ### 물리 DLL (`native/`)
 
@@ -93,3 +152,8 @@
   - 스위치 4(지우기 지연)까지 끄면 원작과 같아집니다.
   - 이번 변경 전부터 있던 동작입니다.
 - 현재 MSVC는 `/fp:contract-`를 모르는 옵션이라며 무시합니다(D9002).
+- Rapier 판은 원작과 계산 결과가 같지 않습니다.
+  - 충돌 시작 콜백의 `false`는 다음 단계부터 적용됩니다.
+  - 콜백은 단계 계산이 끝난 뒤 호출됩니다.
+  - 센서끼리의 겹침은 감지하지 않을 수 있습니다.
+  - 게임 안에서는 아직 실행해 보지 않았습니다.

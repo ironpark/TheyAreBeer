@@ -6,11 +6,11 @@ TAB 최적화 패치 — 소스 (source)
 (소스의 주석은 지웠습니다. 각 파일이 하는 일은 아래에 정리했습니다.)
 
 ■ 빌드
-  - 물리 DLL: Visual Studio 2019/2022(또는 Build Tools)의 「C++ 데스크톱 개발」 → powershell -ExecutionPolicy Bypass -File scripts\build-native.ps1
+  - 물리 DLL: Visual Studio 2019/2022(또는 Build Tools)의 「C++ 데스크톱 개발」 → powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Target chipmunk
       결과 native\out\DXPhysicsNative.dll (+ 비교 도구 compare.exe)
   - 엔진 모드: 위 도구의 MSBuild(Roslyn C# 컴파일러) + 내 TABModLoader 설치에서 가져온 참조 파일 3개
       (TABModLoader 가 고친 TheyAreBillions.exe, 로더 Lib 폴더의 DXVision.dll · 0Harmony.dll)를 한 폴더에 모은 뒤
-      powershell -ExecutionPolicy Bypass -File scripts\build-mod.ps1 -RefDir <그 폴더>   → mod\out\TABPerf.dll
+      powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Target mod -RefDir <그 폴더>   → mod\out\TABPerf.dll
 
 ■ 물리 DLL (native)
   - chipmunk\        Chipmunk2D 7.0.0(MIT, chipmunk\LICENSE.txt). 원작 게임 DLL 과 같은 엔진이며 바꾼 곳:
@@ -32,7 +32,9 @@ TAB 최적화 패치 — 소스 (source)
                      compare.exe <원작 DLL> <새 DLL> [장면|all] [몸체 수] [단계 수] · compare.exe prof <계측 판 DLL> ... · compare.exe ray <DLL>
 
 ■ 엔진 모드 (mod) — 원작 게임 함수를 Harmony 로 감쌉니다
-  - PerfMod.cs       진입점(IModEntry). 모드 폴더의 물리 DLL 을 게임보다 먼저 올리고, 아래 손질을 하나씩 설치(실패한 것만 원작 그대로).
+  - PerfMod.cs       진입점(IModEntry). 물리 DLL 연결(PhysicsRedirect)을 먼저 하고, 아래 손질을 하나씩 설치(실패한 것만 원작 그대로).
+  - PhysicsRedirect.cs 게임의 물리 P/Invoke 호출을 모드 폴더의 엔진(chipmunk\ · rapier\)으로 돌림. 같은 선언을 전체 경로로 다시 만들고,
+                     부르는 게임 메서드의 호출 대상만 Harmony 트랜스파일러로 바꿈(게임 파일은 그대로).
   - SmoothTime.cs    게임 옵션 「빠른 타이머」가 켜져 있을 때 게임 시간을 실제 경과 시간으로(4 ms 계단 → 매끈하게, 원작 감속 규칙 그대로).
   - ParallelFix.cs   원작 병렬 반복(논리·물리)을 작은 조각으로 나눠 일꾼이 하나씩 가져가게(성능/효율 코어가 섞인 CPU). 그리기용 병렬은 원작 그대로.
   - PhysicsTime.cs   물리 보간 기준을 그 단계가 계산한 시각으로. %APPDATA%\TABPerf\engine.json {"physicsIterations": N} 로 물리 반복 수(없으면 원작 10).
@@ -42,6 +44,9 @@ TAB 최적화 패치 — 소스 (source)
                      (먼 좀비 몸체 떼기 기능도 들어 있으나 기본 꺼짐.)
   - EnergyFix.cs, EnergyLinks.cs  전력망 연결 질문을 번호표(연결 요소)로 답함 — 원작 길 찾기와 같은 답, 섬이 생길 때의 끊김 제거.
   - LifeMarkers.cs, GameOptions.cs  게임 옵션 그래픽 탭의 「좀비 체력바 가볍게」(기본 꺼짐) — 켜면 좀비 체력바를 얇은 막대 하나로.
+  - Bench.cs         성능 시험(기본 꺼짐): 마지막 웨이브 바로 발생, 초당 기록(bench.csv), 자동 시험(고정 생존 게임, 최대 줌, 시간 되면 종료).
+                     scripts\bench.ps1 이 엔진별로 돌림.
+  - Settings.cs      설정 읽기: 환경 변수(TABPERF_ENGINE, TABPERF_BENCH_...)가 있으면 그 값, 없으면 engine.json.
   - Watchdog.cs      멈춤 진단(기본으로 켜지 않음). Clock.cs · Log.cs(%APPDATA%\TABPerf\billions.log) · MiniJson.cs 는 도우미.
   - 컴파일 기호 PERFMOD 로 빌드합니다(로그·설정 폴더 TABPerf).
 
@@ -52,6 +57,6 @@ TAB 최적화 패치 — 소스 (source)
 
 
 English: this folder contains the patch's own source code only (comments removed; see the file roles above).
-Build the physics DLL with scripts\build-native.ps1 (MSVC x64) and the engine mod with scripts\build-mod.ps1 -RefDir <folder with your TABModLoader-patched
+Build the physics DLL with scripts\build.ps1 -Target chipmunk (MSVC x64) and the engine mod with scripts\build.ps1 -Target mod -RefDir <folder with your TABModLoader-patched
 TheyAreBillions.exe, DXVision.dll and 0Harmony.dll>. Keep dx_text_pad in dxdiag.c: TABModLoader overwrites 5 bytes at DLL base + 0x13B3.
 Patch code: MIT (LICENSE.txt). Chipmunk2D: MIT. Unofficial; not affiliated with Numantian Games.

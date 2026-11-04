@@ -43,7 +43,7 @@ namespace Billions
 
         static void InstallRemove(Harmony h)
         {
-            if (Environment.GetEnvironmentVariable("TABPERF_FASTREMOVE") == "0") return;
+            if (!Settings.Switch("TABPERF_FASTREMOVE", true)) return;
             try
             {
                 var ds = AccessTools.Method(typeof(DXScene), "DrawScene");
@@ -59,17 +59,8 @@ namespace Billions
         static int _removeSites;
         static IEnumerable<CodeInstruction> RemoveTranspiler(IEnumerable<CodeInstruction> code)
         {
-            return Redirect(code, typeof(List<DXObject>).GetMethod("Remove", new[] { typeof(DXObject) }),
+            return Patching.Redirect(code, typeof(List<DXObject>).GetMethod("Remove", new[] { typeof(DXObject) }),
                 typeof(DrawFast).GetMethod(nameof(RemoveTracked), BindingFlags.Static | BindingFlags.NonPublic), out _removeSites);
-        }
-
-        // Calls to `from` become static calls to `to` (same arguments, the instance first); n: the sites.
-        static List<CodeInstruction> Redirect(IEnumerable<CodeInstruction> code, MethodInfo from, MethodInfo to, out int n)
-        {
-            var list = new List<CodeInstruction>(code); n = 0;
-            foreach (var ci in list)
-                if ((ci.opcode == OpCodes.Callvirt || ci.opcode == OpCodes.Call) && Equals(ci.operand, from)) { ci.opcode = OpCodes.Call; ci.operand = to; n++; }
-            return list;
         }
 
         static void AddPre(DXObject o) { if (o != null) _added.Add(o); }
@@ -91,28 +82,26 @@ namespace Billions
         static Func<object, int> rPending; static Func<object, object> rLast, rVerts;
         static int _stride, _oTex1;
         static Array _scratch;
-        static readonly bool Check = Environment.GetEnvironmentVariable("TABPERF_FASTDRAW_CHECK") == "1";
+        static readonly bool Check = Settings.Switch("TABPERF_FASTDRAW_CHECK", false);
         static long _checkLogAt; static bool _errLogged;
 
         static void InstallSprites(Harmony h)
         {
-            if (Environment.GetEnvironmentVariable("TABPERF_FASTDRAW") == "0") return;
+            if (!Settings.Switch("TABPERF_FASTDRAW", true)) return;
             try
             {
                 if (!DeviceCheck.On) { Log.Info("fast draw: D3D 장치 확인 캐시가 꺼져 있다 — 원작 그대로"); return; }
-                _rt = AccessTools.TypeByName("DXPlatform_Desktop.DXRender_SlimDX");
-                var fVerts = _rt != null ? AccessTools.Field(_rt, "_ObjectArrayVertices") : null;
-                var fDev = _rt != null ? AccessTools.Field(_rt, "_D3DDevice") : null;
-                var tsType = _rt != null ? _rt.GetNestedType("TextureSampler", BindingFlags.NonPublic) : null;
-                if (fVerts == null || fDev == null || tsType == null) { Log.Info("HOOK MISSING (optional): 스프라이트 빠른 그리기 — 원작 그대로"); return; }
-                var texType = fDev.FieldType.Assembly.GetType("SlimDX.Direct3D9.Texture");
-                var vt = fVerts.FieldType.GetElementType();
-                _stride = Marshal.SizeOf(vt); _oTex1 = Marshal.OffsetOf(vt, "TextureCoordinate1").ToInt32();
-                if (_stride != 96 || texType == null) { Log.Info("fast draw: 정점 배치가 예상과 다름(" + _stride + " B) — 원작 그대로"); return; }
+                _rt = Renderer.Type;
+                var dev = Renderer.DeviceType; var tsType = Renderer.Nested("TextureSampler"); var vt = Renderer.VertexType;
+                if (dev == null || tsType == null || vt == null) { Log.Info("HOOK MISSING (optional): 스프라이트 빠른 그리기 — 원작 그대로"); return; }
+                var texType = dev.Assembly.GetType("SlimDX.Direct3D9.Texture");
+                _stride = Marshal.SizeOf(vt);
+                if (_stride != Renderer.VertexSize || texType == null) { Log.Info("fast draw: 정점 배치가 예상과 다름(" + _stride + " B) — 원작 그대로"); return; }
+                _oTex1 = Marshal.OffsetOf(vt, "TextureCoordinate1").ToInt32();
                 _fn = Build(_rt, vt, tsType, texType);
                 if (Check)
                 {
-                    rPending = Get<int>(_rt, "_NPendingObjects"); rLast = Get<object>(_rt, "_LastObjectDrawn"); rVerts = Get<object>(_rt, "_ObjectArrayVertices");
+                    rPending = Get<int>(_rt, Renderer.Pending); rLast = Get<object>(_rt, Renderer.LastDrawn); rVerts = Get<object>(_rt, Renderer.Vertices);
                     _scratch = Array.CreateInstance(vt, 6);
                 }
                 var dobj = AccessTools.Method(typeof(DXScene), "DrawObject", new[] { typeof(DXObject) });
@@ -143,8 +132,8 @@ namespace Billions
             var R = V(rt, "R"); Set(R, Expression.Convert(pr, rt));
             var commit = V(typeof(bool), "commit"); Set(commit, Expression.ReferenceEqual(pd, nul));
             var scene = V(typeof(DXScene), "scene"); Set(scene, F(R, "_Scene")); Fail(Expression.ReferenceEqual(scene, nul));
-            var last = V(typeof(DXObject), "last"); Set(last, F(R, "_LastObjectDrawn"));
-            var pending = V(typeof(int), "pending"); Set(pending, F(R, "_NPendingObjects"));
+            var last = V(typeof(DXObject), "last"); Set(last, F(R, Renderer.LastDrawn));
+            var pending = V(typeof(int), "pending"); Set(pending, F(R, Renderer.Pending));
             // no flush: same material, room in the batch, not the lighting object, no shader effect
             Fail(Expression.AndAlso(Expression.ReferenceNotEqual(last, nul), Expression.NotEqual(F(po, "_IDMaterial"), F(last, "_IDMaterial"))));
             Fail(Expression.GreaterThanOrEqual(pending, Expression.Constant(10000)));
@@ -165,7 +154,7 @@ namespace Billions
             Fail(Expression.NotEqual(I(F(R, "_LastBlendMode")), I(F(po, "_BlendMode"))));
             var ag = V(typeof(float[]), "ag"); Set(ag, F(R, "_ObjectAlfaGammaArray")); var lag = V(typeof(float[]), "lag"); Set(lag, F(R, "_LastObjectAlfaGammaArray"));
             for (int k = 0; k < 4; k++) Fail(Expression.NotEqual(Expression.ArrayIndex(ag, Expression.Constant(k)), Expression.ArrayIndex(lag, Expression.Constant(k))));
-            var verts = V(vt.MakeArrayType(), "verts"); Set(verts, F(R, "_ObjectArrayVertices"));
+            var verts = V(vt.MakeArrayType(), "verts"); Set(verts, F(R, Renderer.Vertices));
             Fail(Expression.AndAlso(commit, Expression.LessThan(Expression.ArrayLength(verts), Expression.Multiply(Expression.Add(pending, Expression.Constant(1)), Expression.Constant(6)))));
             // GetTextureSampler: the sampler already holding this texture, filter and style
             var smp = V(tsType.MakeArrayType(), "smp"); Set(smp, F(R, "_TextureSamplers"));
@@ -232,8 +221,8 @@ namespace Billions
                 Expression.Assign(F(R, "_NCurrentTextureSampler"), n),
                 Expression.Assign(F(R, "_ForceFirstTextureSampler"), Expression.Constant(false)),
                 Expression.Assign(F(R, "_NLastTextureSampler"), n),
-                Expression.Assign(F(R, "_NPendingObjects"), Expression.Add(pending, Expression.Constant(1))),
-                Expression.Assign(F(R, "_LastObjectDrawn"), po))));
+                Expression.Assign(F(R, Renderer.Pending), Expression.Add(pending, Expression.Constant(1))),
+                Expression.Assign(F(R, Renderer.LastDrawn), po))));
             body.Add(Expression.Label(ret, Expression.Constant(true)));
             var lambda = Expression.Lambda<Func<object, DXObject, Array, bool>>(Expression.Block(vars, body), pr, po, pd);
             return lambda.Compile();
@@ -254,7 +243,7 @@ namespace Billions
         static int _drawSites;
         static IEnumerable<CodeInstruction> DrawTranspiler(IEnumerable<CodeInstruction> code)
         {
-            return Redirect(code, typeof(IDXRenderer).GetMethod("DrawObject", new[] { typeof(DXObject) }),
+            return Patching.Redirect(code, typeof(IDXRenderer).GetMethod("DrawObject", new[] { typeof(DXObject) }),
                 typeof(DrawFast).GetMethod(nameof(Draw), BindingFlags.Static | BindingFlags.Public), out _drawSites);
         }
 

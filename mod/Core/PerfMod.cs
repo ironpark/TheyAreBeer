@@ -41,7 +41,7 @@ namespace Billions
 
         // engine.json {"physicsEngine": "chipmunk" | "rapier" | "original"}, or TABPERF_ENGINE; default chipmunk (the multi-core
         // Chipmunk replacement).
-        static string PhysicsEngine() { return Settings.Str(PhysicsTime.Config(), "physicsEngine", "TABPERF_ENGINE", "chipmunk").Trim().ToLowerInvariant(); }
+        static string PhysicsEngine() { return Settings.Str(Settings.Config(), "physicsEngine", "TABPERF_ENGINE", "chipmunk").Trim().ToLowerInvariant(); }
 
         // Sends the game's physics calls to an engine in the mod folder (<mod>\chipmunk\ or <mod>\rapier\, each in its own
         // folder so the loader does not try it as a .NET assembly and Rapier finds its rapier2d_ffi.dll next to it):

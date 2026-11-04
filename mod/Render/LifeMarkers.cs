@@ -82,19 +82,18 @@ namespace Billions
         static FieldInfo _fVerts, _fPending, _fLast; static MethodInfo _mFlush; static bool _batchErrLogged, _inFlush; static int _frame, _appendedFrame = -1;
         public static int LastMarks, LastBatched; static float _dotH = 5f, _bigH = 7f;
         public static bool BatchActive { get { return Mode == 3 && _batchOk; } }
-        const int Stride = 24;
+        const int Stride = Renderer.VertexSize / 4;   // floats per vertex
 
         static void InstallBatch(Harmony h)
         {
             try
             {
-                var rt = AccessTools.TypeByName("DXPlatform_Desktop.DXRender_SlimDX"); if (rt == null) { Log.Info("life markers: 렌더러 형식 없음 — Mode 2"); return; }
-                _fVerts = AccessTools.Field(rt, "_ObjectArrayVertices"); _fPending = AccessTools.Field(rt, "_NPendingObjects"); _fLast = AccessTools.Field(rt, "_LastObjectDrawn");
-                _mFlush = AccessTools.Method(rt, "DrawPendingObjects");
+                _fVerts = Renderer.VerticesField; _fPending = Renderer.Field(Renderer.Pending); _fLast = Renderer.Field(Renderer.LastDrawn);
+                _mFlush = Renderer.Method("DrawPendingObjects");
                 var onr = AccessTools.Method(typeof(OEntityMeter), "OnRender");
                 if (_fVerts == null || _fPending == null || _fLast == null || _mFlush == null || onr == null) { Log.Info("life markers: 렌더러 내부 없음 — Mode 2"); return; }
-                var et = _fVerts.FieldType.GetElementType(); int sz = et != null ? Marshal.SizeOf(et) : 0;
-                if (sz != Stride * 4) { Log.Info("life markers: 정점 크기 " + sz + " ≠ 96 — Mode 2"); return; }
+                int sz = Marshal.SizeOf(Renderer.VertexType);
+                if (sz != Renderer.VertexSize) { Log.Info("life markers: 정점 크기 " + sz + " ≠ " + Renderer.VertexSize + " — Mode 2"); return; }
 
                 h.Patch(_mFlush, new HarmonyMethod(typeof(LifeMarkers), nameof(FlushPre)));
                 h.Patch(onr, new HarmonyMethod(typeof(LifeMarkers), nameof(AnchorRenderPre)));

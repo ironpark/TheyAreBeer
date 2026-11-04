@@ -24,7 +24,7 @@ namespace Billions
         internal static int Apply(Dictionary<MethodInfo, MethodInfo> map, Func<int, int, int> opt)
         {
             On = false;
-            if (opt == null || Environment.GetEnvironmentVariable("TABPERF_FASTBODY") == "0") return 0;
+            if (opt == null || !Settings.Switch("TABPERF_FASTBODY", true)) return 0;
             try
             {
                 if (opt(200, 0) != 2 || opt(206, 0) != LayoutVersion) return 0;

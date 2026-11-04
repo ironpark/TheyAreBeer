@@ -52,7 +52,7 @@ namespace Billions
             // loop, with real elapsed time) is used either way; engine.json "fastTiming": false or TABPERF_FASTTIMING=0
             // keeps the game's choice. The option itself is not changed.
             bool hpt = g.Configuration.HighPerformanceTiming;
-            if (!hpt && !Settings.Bool(PhysicsTime.Config(), "fastTiming", "TABPERF_FASTTIMING", true)) return true;
+            if (!hpt && !Settings.Bool(Settings.Config(), "fastTiming", "TABPERF_FASTTIMING", true)) return true;
             if (!hpt) Log.Info("smooth time: 게임 옵션 FastTimming 이 꺼져 있지만 빠른 타이머 루프를 쓴다(engine.json fastTiming)");
             Task started = null; bool threadStarted = false;
             try

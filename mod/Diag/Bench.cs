@@ -44,7 +44,7 @@ namespace Billions
         {
             try
             {
-                var m = PhysicsTime.Config();
+                var m = Settings.Config();
                 Enabled = Settings.Bool(m, "bench", "TABPERF_BENCH", false);
                 if (!Enabled) return;
                 _factor = Math.Max(1, Math.Min(20, Settings.Int(m, "benchSwarmFactor", "TABPERF_BENCH_FACTOR", 4)));

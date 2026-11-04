@@ -51,7 +51,7 @@ namespace Billions
 
         public static void Install(Harmony h)
         {
-            if (Environment.GetEnvironmentVariable("TABPERF_SWARMFAST") == "0") { Log.Info("swarm: TABPERF_SWARMFAST=0 — 원작 그대로"); return; }
+            if (!Settings.Switch("TABPERF_SWARMFAST", true)) { Log.Info("swarm: TABPERF_SWARMFAST 끔 — 원작 그대로"); return; }
             if (PhysicsRedirect.Module == IntPtr.Zero || PerfMod.PhysOpt(200, 0) != 2) { Log.Info("swarm: Rapier 대체본이 아님 — 원작 그대로"); return; }
             _new = PhysicsRedirect.Proc<NewFn>("DX_GroupNew"); _free = PhysicsRedirect.Proc<FreeFn>("DX_GroupFree");
             _add = PhysicsRedirect.Proc<AddFn>("DX_GroupAdd"); _cells = PhysicsRedirect.Proc<CellsFn>("DX_GroupCells");
@@ -177,7 +177,7 @@ namespace Billions
         }
 
         // TABPERF_SWARMCHECK=1: every fast call also walks the unit list the game's way and counts disagreements (log).
-        static readonly bool Check = Environment.GetEnvironmentVariable("TABPERF_SWARMCHECK") == "1";
+        static readonly bool Check = Settings.Switch("TABPERF_SWARMCHECK", false);
         static long Checked, CountDiff, CellDiff; static long _checkLogAt;
         static void Compare(List<Unit> units, int alive, int sx, int sy)
         {

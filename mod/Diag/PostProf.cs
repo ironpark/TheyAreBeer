@@ -1,4 +1,5 @@
 using System;
+using HarmonyLib;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -11,7 +12,7 @@ namespace Billions
     // timing each by the method behind the delegate, and logs the totals (Dump, at the end of a bench run).
     public static class PostProf
     {
-        public static readonly bool On = Environment.GetEnvironmentVariable("TABPERF_POSTPROF") == "1";
+        public static readonly bool On = Settings.Switch("TABPERF_POSTPROF", false);
         static FieldInfo _queueField; static Type _queueOwner;
         sealed class Stat { public long Count, Ticks; }
         static readonly Dictionary<MethodInfo, Stat> _stats = new Dictionary<MethodInfo, Stat>();
@@ -21,7 +22,7 @@ namespace Billions
         public static bool Run(object manager)
         {
             var t = manager.GetType();
-            if (t != _queueOwner) { _queueField = t.GetField("_PendingMethods", BindingFlags.Instance | BindingFlags.NonPublic); _queueOwner = t; }
+            if (t != _queueOwner) { _queueField = AccessTools.Field(t, "_PendingMethods"); _queueOwner = t; }
             var q = _queueField != null ? _queueField.GetValue(manager) as ConcurrentQueue<Action> : null;
             if (q == null) return false;
             _batches++;

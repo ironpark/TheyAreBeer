@@ -148,7 +148,7 @@ function Build-Mod {
   $fw = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
   $refs = @('System.dll', 'System.Core.dll', 'System.Drawing.dll', 'System.Windows.Forms.dll', 'System.Numerics.dll' | ForEach-Object { '-r:"' + (Join-Path $fw $_) + '"' })
   $refs += $refFiles | ForEach-Object { '-r:"' + (Join-Path $RefDir $_) + '"' }
-  $src = Get-ChildItem $here -Filter *.cs | ForEach-Object { '"' + $_.FullName + '"' }
+  $src = Get-ChildItem $here -Filter *.cs -Recurse | Where-Object { $_.FullName -notlike "$out\*" } | ForEach-Object { '"' + $_.FullName + '"' }
   $cscArgs = @('-nologo', '-target:library', '-langversion:7.3', '-optimize+', '-deterministic', '-unsafe+', '-nowarn:1701,1702,0169', '-define:PERFMOD', "-out:`"$out\TABPerf.dll`"") + $refs + $src
   & $compiler @cscArgs
   if ($LASTEXITCODE -ne 0) { throw 'Mod build failed' }

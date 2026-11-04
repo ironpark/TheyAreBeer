@@ -22,14 +22,13 @@ namespace Billions
 
         public static void Install(Harmony h)
         {
-            if (Environment.GetEnvironmentVariable("TABPERF_DEVICECHECK") == "0") { Log.Info("device check: TABPERF_DEVICECHECK=0 — 원작 그대로"); return; }
+            if (!Settings.Switch("TABPERF_DEVICECHECK", true)) { Log.Info("device check: TABPERF_DEVICECHECK 끔 — 원작 그대로"); return; }
             try
             {
-                var rt = AccessTools.TypeByName("DXPlatform_Desktop.DXRender_SlimDX");
-                var fd = rt != null ? AccessTools.Field(rt, "_D3DDevice") : null;
-                var tcl = fd != null ? fd.FieldType.GetMethod("TestCooperativeLevel", Type.EmptyTypes) : null;
-                var ss = AccessTools.Method(rt, "DXVision.IDXRenderer.StartScene");
-                var fs = AccessTools.Method(rt, "DXVision.IDXRenderer.FinishScene");
+                var dev = Renderer.DeviceType;
+                var tcl = dev != null ? dev.GetMethod("TestCooperativeLevel", Type.EmptyTypes) : null;
+                var ss = Renderer.Method("DXVision.IDXRenderer.StartScene");
+                var fs = Renderer.Method("DXVision.IDXRenderer.FinishScene");
                 _isSuccess = tcl != null ? tcl.ReturnType.GetProperty("IsSuccess") : null;
                 if (tcl == null || ss == null || fs == null || _isSuccess == null) { Log.Info("HOOK MISSING (optional): D3D 장치 확인 — 원작 그대로"); return; }
                 h.Patch(ss, new HarmonyMethod(typeof(DeviceCheck), nameof(SceneStart)));

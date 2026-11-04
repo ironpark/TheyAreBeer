@@ -29,14 +29,6 @@ namespace Billions
         static long Cpu() { long c, e, k, u; return GetThreadTimes(GetCurrentThread(), out c, out e, out k, out u) ? k + u : 0; }
         static void SepPre() { System.Threading.Interlocked.Increment(ref SepCalls); }
 
-        internal static string ConfigPath { get { return Path.Combine(Log.Dir, "engine.json"); } }
-        // engine.json as read now (null when missing or unreadable); read again each time, so edits apply without a restart
-        internal static System.Collections.Generic.Dictionary<string, object> Config()
-        {
-            try { return File.Exists(ConfigPath) ? MiniJson.Parse(File.ReadAllText(ConfigPath)) as System.Collections.Generic.Dictionary<string, object> : null; }
-            catch (Exception e) { Log.Error("engine.json", e); return null; }
-        }
-
         public static void Install(Harmony h)
         {
             try
@@ -67,7 +59,7 @@ namespace Billions
         {
             try
             {
-                var m = Config();
+                var m = Settings.Config();
                 int it = MiniJson.Int(m, "physicsIterations", 0);
                 if (it >= 1 && it <= 30) __0 = it;
                 Iterations = __0;

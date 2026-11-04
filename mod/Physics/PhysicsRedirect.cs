@@ -152,7 +152,7 @@ namespace Billions
             // Without SuppressUnmanagedCodeSecurity every call also runs the runtime's unmanaged-code permission check
             // (a stack walk); the game makes several calls per body per step. In the game's final swarm (70,000 zombies)
             // the per-body work around the step went from 10.1 to 3.9 ms a step with it. TABPERF_SUCS=0 leaves it off.
-            if (Environment.GetEnvironmentVariable("TABPERF_SUCS") != "0")
+            if (Settings.Switch("TABPERF_SUCS", true))
                 tb.SetCustomAttribute(new CustomAttributeBuilder(typeof(System.Security.SuppressUnmanagedCodeSecurityAttribute).GetConstructor(Type.EmptyTypes), new object[0]));
             foreach (var m in imports)
             {
@@ -221,12 +221,8 @@ namespace Billions
 
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> code)
         {
-            foreach (var ins in code)
-            {
-                MethodInfo to;
-                if ((ins.opcode == OpCodes.Call || ins.opcode == OpCodes.Callvirt) && ins.operand is MethodInfo mi && _map.TryGetValue(mi, out to)) ins.operand = to;
-                yield return ins;
-            }
+            int n;
+            return Patching.Redirect(code, _map, out n);
         }
     }
 }

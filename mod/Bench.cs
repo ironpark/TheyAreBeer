@@ -314,6 +314,13 @@ namespace Billions
                     var lk = new int[13]; for (int k = 0; k < 13; k++) lk[k] = PerfMod.PhysOpt(340 + k, 0);
                     for (int k = 0; k < 8; k += 2) game += "," + lk[k + 1].ToString(c) + "," + (lk[k] / 1000.0).ToString("0.0", c);
                     game += "," + (lk[9] > 0 ? (double)lk[8] / lk[9] : 0).ToString("0", c) + "," + lk[10].ToString(c) + "," + lk[11].ToString(c) + "," + lk[12].ToString(c);   // ray walk check (DX_RAPIER_RAYWALK=2), category changes
+                    // Rapier's parallel solver this second (DX_SetOption 400-409, with RAPIER_SOLVER_DIAG set): barrier wait and
+                    // worker run time summed over the workers (ms), barrier waits, worker 0's serial overflow time (ms), then per
+                    // solve: colors, overflow chunks, chunks, workers
+                    int sd = PerfMod.PhysOpt(400, 0), solves = sd > 8 ? PerfMod.PhysOpt(409, 0) : 0;
+                    game += "," + (sd > 8 ? PerfMod.PhysOpt(401, 0) / 1000.0 : 0).ToString("0", c) + "," + (sd > 8 ? PerfMod.PhysOpt(404, 0) / 1000.0 : 0).ToString("0", c)
+                        + "," + (sd > 8 ? PerfMod.PhysOpt(402, 0) : 0).ToString(c) + "," + (sd > 8 ? PerfMod.PhysOpt(403, 0) / 1000.0 : 0).ToString("0.0", c);
+                    for (int k = 405; k <= 408; k++) game += "," + (solves > 0 ? PerfMod.PhysOpt(k, 0) / (double)solves : 0).ToString("0.0", c);
                     // queries by kind (DX_SetOption 360 + kind * 6 + field): calls, total ms, ms waiting for the index lock,
                     // ms in the game's callbacks, index entries looked at and hits per call
                     for (int q = 0; q < 6; q++)
@@ -345,7 +352,7 @@ namespace Billions
                     steps.ToString(c), (steps > 0 ? Ms(st) / steps : 0).ToString("0.00", c), Ms(sm).ToString("0.00", c),
                     zombies.ToString(c), note, sections, game);
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(CsvPath)));
-                if (!_header && !File.Exists(CsvPath)) File.AppendAllText(CsvPath, "time,engine,paused,frames,frame_avg_ms,frame_max_ms,phys_steps,step_avg_ms,step_max_ms,zombies,note,r_push_ms,r_step_ms,r_pull_ms,r_pairs_ms,r_index_ms,r_substeps,r_contact_pairs," + StageHeader + ",g_postmethods_ms,g_pre_ms,g_post_ms,g_syncwait_ms,g_logicwait_ms,g_ia_per_s,g_ia_ms,n_create_per_s,n_create_us,n_settype_per_s,n_settype_us,n_insert_us,n_collider_us,n_indexwait_ms,g_update_ms,g_speed,g_phys_usage,g_ia_usage,g_clock_rate,l_calls,l_wait_ms,l_tasks,l_start_ms,l_task_ms,l_ticks,l_idle,l_block_ia_ms,l_block_phys_ms,l_run_ms,g_cpu_cores" + CallHeader + ",n_pending,n_ray_diff,n_ray_tie,n_catset" + QueryHeader + "\r\n");
+                if (!_header && !File.Exists(CsvPath)) File.AppendAllText(CsvPath, "time,engine,paused,frames,frame_avg_ms,frame_max_ms,phys_steps,step_avg_ms,step_max_ms,zombies,note,r_push_ms,r_step_ms,r_pull_ms,r_pairs_ms,r_index_ms,r_substeps,r_contact_pairs," + StageHeader + ",g_postmethods_ms,g_pre_ms,g_post_ms,g_syncwait_ms,g_logicwait_ms,g_ia_per_s,g_ia_ms,n_create_per_s,n_create_us,n_settype_per_s,n_settype_us,n_insert_us,n_collider_us,n_indexwait_ms,g_update_ms,g_speed,g_phys_usage,g_ia_usage,g_clock_rate,l_calls,l_wait_ms,l_tasks,l_start_ms,l_task_ms,l_ticks,l_idle,l_block_ia_ms,l_block_phys_ms,l_run_ms,g_cpu_cores" + CallHeader + ",n_pending,n_ray_diff,n_ray_tie,n_catset,s_wait_ms,s_run_ms,s_waits,s_overflow_ms,s_colors,s_overflow_chunks,s_chunks,s_workers" + QueryHeader + "\r\n");
                 _header = true;
                 File.AppendAllText(CsvPath, line + "\r\n");
             }

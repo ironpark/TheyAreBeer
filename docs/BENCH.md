@@ -205,8 +205,8 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `TABPERF_SUCS` | `0`이면 물리 호출의 권한 검사 생략을 끔 |
 | `TABPERF_FASTBODY` | `0`이면 Rapier 몸체 값 직접 접근을 끔 |
 | `TABPERF_POSTPROF` | `1`이면 물리 대기 작업을 메서드별로 재어, 시험이 끝날 때 로그에 `postprof:` 줄로 남김 |
-| `TABPERF_SWARMFAST`, `TABPERF_DEVICECHECK`, `TABPERF_FASTREMOVE`, `TABPERF_FASTDRAW` | `0`이면 웨이브 미니맵 표시·D3D 장치 확인·루트 목록 지우기·단순 스프라이트 손질을 끔(`0`만 받음) |
-| `TABPERF_SWARMCHECK`, `TABPERF_FASTDRAW_CHECK` | `1`이면 웨이브 표시·단순 스프라이트를 원작과 함께 계산해 차이를 로그에 남김(`swarm check:`, `fast draw check:`). 느려지므로 시간 비교에는 쓰지 말 것(`1`만 받음) |
+| `TABPERF_SWARMFAST`, `TABPERF_DEVICECHECK`, `TABPERF_FASTREMOVE`, `TABPERF_FASTDRAW` | `0`이면 웨이브 미니맵 표시·D3D 장치 확인·루트 목록 지우기·단순 스프라이트 손질을 끔|
+| `TABPERF_SWARMCHECK`, `TABPERF_FASTDRAW_CHECK` | `1`이면 웨이브 표시·단순 스프라이트를 원작과 함께 계산해 차이를 로그에 남김(`swarm check:`, `fast draw check:`). 느려지므로 시간 비교에는 쓰지 말 것 |
 
 각 설정의 배경과 측정 결과는 [DEVELOPMENT.md](DEVELOPMENT.md)를 보세요.
 

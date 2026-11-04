@@ -311,7 +311,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bench.ps1 -Engine chipmunk,ra
 ## 소스 구성
 
 ```text
-mod/                   C# 엔진 최적화 모드와 모드 정보
+mod/                   C# 엔진 최적화 모드(TABPerf.dll)와 모드 정보(ModInfos.json)
+├─ Core/                진입점과 설치 순서(PerfMod), 설정(engine.json 포함)·로그·시계, 공용 Harmony 도우미
+├─ Physics/             물리 DLL 연결, Rapier 몸체 직접 접근, 물리 단계·게임 시간, 논리/물리 병렬 분할
+├─ Logic/               좀비 적 찾기, 전력망, 소리
+├─ Render/              렌더러 내부 접근(Renderer), 그리기 순서, 체력바와 옵션 창, 그리기 빠른 길, 웨이브 미니맵 표시
+└─ Diag/                성능 시험 모드와 계측
 docs/
 ├─ BENCH.md             게임 안 성능 시험 사용법
 └─ DEVELOPMENT.md       구현 방식, 측정·실험 결과

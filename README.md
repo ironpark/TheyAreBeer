@@ -18,7 +18,7 @@ They Are Billions 최적화 패치 ~~데아-비루~~
 | 물리 연산 | Chipmunk2D 기반 물리 엔진의 위치·속도 계산, 충돌 탐색, 접촉 처리 등을 다중 코어로 처리 |
 | 물리 엔진 교체 | 선택 설정으로 물리 엔진을 [Rapier](https://rapier.rs/) 2D로 교체 |
 | 작업 분배 | 논리·물리 작업을 작은 단위로 나눠 CPU 작업 부하를 분산 |
-| 게임 시간 | 게임 옵션의 **빠른 타이머**가 켜져 있을 때 실제 경과 시간을 이용해 시간 갱신을 부드럽게 처리 |
+| 게임 시간 | 게임 옵션의 **빠른 타이머**와 상관없이 실제 경과 시간으로 게임 시계를 돌려, 물리 계산 중 게임이 멈추지 않게 함 |
 | 물리 보간 | 물리 단계의 계산 시각에 맞춰 화면에 표시할 위치의 보간 기준을 보정 |
 | 그리기 순서 | Z 순서 변경량에 따라 정렬 방식과 갱신 주기를 조절 |
 | 좀비 탐색 | 거리 지도를 활용해 도달할 수 없는 대상에 대한 불필요한 적 탐색을 생략 |
@@ -81,7 +81,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 | --- | --- | --- |
 | `chipmunk` | `native\out\DXPhysicsNative.dll` | Chipmunk2D를 여러 코어로 계산하는 물리 DLL |
 | `harness` | `native\out\compare.exe` | 원작 DLL과 대체본을 함께 돌려 비교하는 도구 |
-| `rapier` | `native\out\rapier\DXPhysicsNative.dll`, `rapier2d_ffi.dll`, `rapier2d_ffi_avx2.dll` | [Rapier](https://rapier.rs/) 2D 엔진으로 동작하는 물리 DLL |
+| `rapier` | `native\out\rapier\DXPhysicsNative.dll`, `rapier2d_ffi.dll`, `rapier2d_ffi_avx2.dll`, `rapier2d_ffi_avx512.dll` | [Rapier](https://rapier.rs/) 2D 엔진으로 동작하는 물리 DLL |
 | `mod` | `mod\out\TABPerf.dll`, `mod\out\ModInfos.json` | 엔진 모드 |
 
 - `-Target`을 생략하면(`all`) 모두 빌드합니다. 이때 비교 도구 빌드가 실패하면 경고만 남기고, Rapier에 필요한 도구(git, cmake, rustup)가 없으면 Rapier를 건너뜁니다. 대상을 직접 지정하면 실패를 오류로 처리합니다.
@@ -91,9 +91,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 Rapier 빌드는 Rapier의 공식 C 바인딩을 [공식 문서](https://rapier.rs/docs/user_guides/c/getting_started_c)의 CMake 빌드로 만들며, 다음 순서로 진행합니다.
 
 1. Rapier 저장소를 고정 커밋으로 `native\out\rapier-src`에 받습니다.
-2. 필요한 Rust 버전(1.99.1)이 없으면 설치합니다.
-3. `-DRAPIER_DIMENSION=2 -DRAPIER_PRECISION=32 -DRAPIER_ENABLE_PARALLEL=ON -DRAPIER_SIMD_LANES=8`으로 두 번 빌드하고 CMake 통합 테스트를 돌립니다. 한 번은 모든 x64 CPU용, 한 번은 AVX2·FMA용(Rust `+avx2,+fma`)입니다. AVX2 빌드는 CPU와 OS가 AVX2를 지원할 때만 불러오며, 없어도 동작합니다.
-4. 같은 정의(`RAPIER_DIM2`, `RAPIER_F32`, `RAPIER_PARALLEL`)로 `DXPhysicsNative.dll`을 빌드합니다. 이 DLL은 같은 폴더의 `rapier2d_ffi.dll`을 불러옵니다.
+2. `native\rapier\*.patch`를 받은 소스에 적용합니다. 패치 목록이나 내용이 바뀌면 소스를 고정 커밋 상태로 되돌린 뒤 모두 다시 적용합니다.
+   - `rapier-c-batch-write.patch`: 여러 몸체의 위치·속도를 한 번의 호출로 쓰는 `r2RigidBody_WriteStates`를 C 바인딩에 더합니다(공식 바인딩은 몸체·값마다 호출해야 하고, 호출마다 세계 잠금과 오류 처리를 거칩니다).
+   - `rapier-solver-park.patch`: 병렬 솔버의 작업 스레드가 단계를 기다릴 때 `RAPIER_SYNC_SPIN`번 돈 뒤 잠들게 합니다(래퍼 기본 2000). 게임의 로직·그리기 스레드에 코어를 돌려줍니다.
+   - `rapier-c-step-counters.patch`: 마지막 단계의 Rapier 내부 구간 시간(넓은 범위·좁은 범위 충돌 검사, 섬 제약 수집, 솔버 등)과 접촉 수를 한 번에 읽는 `r2StepCounters`를 더합니다. Rapier의 `profiler` 기능으로 빌드하며, 카운터는 켤 때만 잽니다.
+3. 필요한 Rust 버전(1.99.1)이 없으면 설치합니다.
+4. `-DRAPIER_DIMENSION=2 -DRAPIER_PRECISION=32 -DRAPIER_ENABLE_PARALLEL=ON -DRAPIER_SIMD_LANES=8 -DRAPIER_FEATURES=profiler`로 세 번 빌드하고 CMake 통합 테스트를 돌립니다. 모든 x64 CPU용, AVX2·FMA용(Rust `+avx2,+fma`), AVX-512용(여기에 `+avx512f,+avx512vl,+avx512bw,+avx512dq,+avx512cd`)이며 모두 8레인 솔버입니다. Rust 쪽은 fat LTO·코드 생성 단위 1개로 빌드합니다(Cargo 환경 변수 `CARGO_PROFILE_RELEASE_LTO=fat`). 빌드 PC가 그 명령어를 지원하지 않으면 그 빌드의 테스트는 건너뜁니다.
+5. 같은 정의(`RAPIER_DIM2`, `RAPIER_F32`, `RAPIER_PARALLEL`)로 `DXPhysicsNative.dll`을 빌드합니다. 이 DLL은 CPU와 OS가 지원하는 가장 높은 빌드(AVX-512 → AVX2 → 기본)를 같은 폴더에서 불러옵니다. 파일이 없으면 다음 단계로 내려갑니다.
 
 ### 2. 설치
 
@@ -114,7 +118,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Engine chipmunk
       └─ rapier/                      # Rapier를 빌드했을 때 (native\out\rapier)
          ├─ DXPhysicsNative.dll
          ├─ rapier2d_ffi.dll
-         └─ rapier2d_ffi_avx2.dll
+         ├─ rapier2d_ffi_avx2.dll
+         └─ rapier2d_ffi_avx512.dll
 ```
 
 - `-Engine chipmunk|rapier|original`은 `engine.json`의 `physicsEngine`을 함께 정합니다(아래 [물리 엔진 선택](#물리-엔진-선택)). 생략하면 설정을 바꾸지 않습니다.
@@ -150,7 +155,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Engine chipmunk
 | --- | --- |
 | `billions.log` | 모드 로드, 개별 최적화 적용, 물리 DLL 적용 여부 및 오류 기록 |
 | `options.json` | 게임 그래픽 옵션의 **좀비 체력바 가볍게** 설정 저장. 기본값은 꺼짐 |
-| `engine.json` | 선택적으로 물리 엔진(`physicsEngine`), 물리 계산 반복 횟수(`physicsIterations`), 성능 시험 설정 지정 |
+| `engine.json` | 선택적으로 물리 엔진(`physicsEngine`), 물리 계산 반복 횟수(`physicsIterations`), 빠른 타이머(`fastTiming`), 성능 시험 설정 지정 |
 | `dxphysics-crash.txt` | 네이티브 DLL 내부 오류 진단 기록. 저장 폴더가 이미 존재할 때 기록 |
 
 물리 반복 횟수를 직접 지정하려면 `engine.json`에 다음과 같이 작성합니다.
@@ -162,6 +167,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Engine chipmunk
 ```
 
 허용 범위는 `1`~`30`이며, 설정하지 않으면 원작의 반복 횟수(기본 10)를 사용합니다. 이 값은 물리 계산 반복 횟수를 바꾸는 고급 설정입니다.
+
+게임 옵션 **FastTimming**이 꺼져 있으면 원작은 물리 계산이 도는 동안 게임 시계를 멈춥니다. 그래서 좀비가 많을수록 게임 전체가 느려집니다(좀비 7만 마리에서 약 0.5배속). 모드는 이 옵션과 상관없이 원작의 빠른 타이머 방식으로 게임 시계를 돌립니다. 게임 옵션 값은 바꾸지 않습니다. 원작 방식으로 되돌리려면 `engine.json`에 `"fastTiming": false`를 넣습니다(환경 변수 `TABPERF_FASTTIMING=0`도 같음).
 
 ### 물리 엔진 선택
 
@@ -189,9 +196,21 @@ Rapier 엔진은 원작과 같은 함수로 동작하지만, 계산 방식이 �
 - `Body_SetSize`는 실제로 크기를 바꿉니다. 원작 DLL에서는 움직이는 사각형 몸체의 크기 변경이 다음 단계에 사라집니다.
 - 반지름이 있는 질의(`radius > 0`)는 사각형 모서리를 둥글리지 않고 계산합니다.
 
-작업 스레드 수는 Chipmunk 판과 같이 `DX_PHYS_THREADS`로 지정합니다. Rapier 솔버 반복 횟수는 기본으로 게임이 넘기는 값(10, `physicsIterations`로 바꾼 경우 그 값)을 쓰고, `DX_RAPIER_ITERATIONS` 환경 변수(1~30)로 따로 지정할 수 있습니다. 반복을 줄이면 몸체가 더 겹쳐 접촉 계산이 늘어나기 때문에, 오히려 느려질 수 있습니다.
+Rapier 하위 단계(솔버 반복) 수는 게임이 넘기는 값(10, `physicsIterations`로 바꾼 경우 그 값)에서 시작해, 몸체가 몰리는 정도에 따라 5~20 사이에서 자동으로 바뀝니다. 하위 단계가 적으면 몸체가 더 겹쳐 접촉 계산이 늘기 때문에, 몰릴수록 늘리는 편이 빠릅니다.
 
-Rapier 판은 Rapier의 기능을 그대로 씁니다. 충돌 필터는 충돌 그룹(OR 판정)으로, 충돌 시작·분리 콜백은 충돌 이벤트로 처리합니다. 멈춘 몸체는 잠자기(sleep)에 들어가 계산에서 빠집니다. 잠자기는 `DX_RAPIER_SLEEP=0`으로 끌 수 있습니다. AVX2 빌드는 `DX_RAPIER_AVX2=0`으로 끄고 기본 빌드를 쓸 수 있습니다. 로그의 물리 DLL 줄에 `Rapier 대체본 (AVX2)`로 표시됩니다. 디버그 빌드 Rapier 라이브러리(약 100배 느림)를 불러오면 같은 줄에 경고가 붙습니다. 접촉 강성은 게임의 긴 단계(1/12초)에 맞춰 줄이며, `DX_RAPIER_SOFTNESS=0`으로 Rapier 기본값을 쓸 수 있습니다. `DX_RAPIER_CCD=0`은 연속 충돌 검사(CCD)를 꺼 단계를 줄이지만(몸체 6만 개 밀집에서 r2Step 약 17% 감소), 밀집 장면에서 벽을 통과하는 몸체가 늘어 기본으로는 켜 둡니다. 값이 NaN이 되어 Rapier가 격리한 몸체는 마지막 정상 위치에서 되살립니다.
+Rapier 판은 사용하는 CPU에 맞는 빌드(AVX-512 → AVX2 → 기본)를 골라 씁니다. 로그의 물리 DLL 줄에 `Rapier 대체본 (AVX-512)` 또는 `(AVX2)`로 표시되고, 디버그 빌드 Rapier 라이브러리(약 100배 느림)를 불러오면 같은 줄에 경고가 붙습니다.
+
+필요하면 게임 실행 환경의 환경 변수로 동작을 바꿀 수 있습니다.
+
+| 환경 변수 | 뜻 |
+| --- | --- |
+| `DX_PHYS_THREADS` | 작업 스레드 수(Chipmunk 판과 같음) |
+| `DX_RAPIER_ITERATIONS` | 하위 단계 수 고정(1~30) |
+| `DX_RAPIER_ADAPT=0` | 하위 단계 자동 조절 끔(게임 값 고정). 범위는 `DX_RAPIER_ADAPT_MIN`·`DX_RAPIER_ADAPT_MAX` |
+| `DX_RAPIER_SLEEP=0` | 멈춘 몸체의 잠자기(sleep) 끔 |
+| `DX_RAPIER_AVX512=0`, `DX_RAPIER_AVX2=0` | AVX-512 빌드 대신 AVX2를, AVX2 대신 기본 빌드를 씀 |
+
+시험·비교용 스위치(일괄 쓰기, 접촉 강성, CCD, 내부 구간 시간, 접촉 파라미터 등)와 구현 방식은 [개발 문서](docs/DEVELOPMENT.md#rapier-래퍼-구조)에 있습니다.
 
 네이티브 물리 작업 스레드 수는 자동으로 결정됩니다. 필요하면 게임 실행 환경의 `DX_PHYS_THREADS` 환경 변수로 지정할 수 있으며, `0`은 작업 스레드를 끕니다.
 
@@ -252,58 +271,15 @@ Rapier 판은 Rapier의 기능을 그대로 씁니다. 충돌 필터는 충돌 �
 - Rapier는 모든 구간에서 Chipmunk 다중 코어보다 단계 시간이 1.5~2.3배 깁니다. 가장 긴 프레임도 Rapier가 더 깁니다(최대 228 ms, Chipmunk 154 ms).
 - 9만 마리 근처에서는 Chipmunk 다중 코어도 초당 5단계 정도라 게임이 제 속도로 돌지 않습니다.
 - 이 측정에서는 각 엔진의 `DXPhysicsNative.dll`(Rapier는 `rapier2d_ffi.dll`·`rapier2d_ffi_avx2.dll`과 함께)을 게임 폴더에 넣었습니다. 지금 방식(모드 폴더에서 연결)과 단계 시간은 같습니다([물리 DLL 연결 방식](#물리-dll-연결-방식)).
+- 이 측정은 게임 옵션 FastTimming이 꺼진 상태에서, 모드가 옵션과 상관없이 빠른 타이머를 쓰기 전에 했습니다. 그때는 물리 계산 동안 게임 시계가 멈춰 물리 단계/초가 낮게 나왔습니다. 빠른 타이머에서의 측정은 [개발 문서](docs/DEVELOPMENT.md#게임-시계와-로직-갱신)에 있습니다.
 
-같은 측정은 벤치 스크립트로 바로 할 수 있습니다. 엔진마다 게임을 한 번씩 띄워 자동 시험을 돌리고 결과를 정리합니다.
+같은 측정은 벤치 스크립트로 바로 할 수 있습니다. 엔진마다 게임을 한 번씩 띄워 자동 시험을 돌리고 결과를 정리합니다. Steam이 켜져 있어야 합니다.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\bench.ps1 -Engine chipmunk,rapier,original -Seconds 240
 ```
 
-- `-Engine`(쉼표로 여러 개, 기본 `chipmunk,rapier`), `-Runs`(엔진마다 반복 횟수), `-Seconds`, `-Factor`, `-Delay`, `-Seed`, `-Threads`, `-Zoom max|off`가 아래 설정과 같은 뜻입니다.
-- 결과는 `bench-out\<날짜-시각>\`에 실행별 CSV(`<엔진>-<회차>.csv`)와 `summary.csv`(최대 좀비 수, 평균 단계·프레임 시간, 마지막 30초 평균)로 남습니다. `-OutDir`로 바꿀 수 있습니다.
-- 설정은 환경 변수로 게임에 넘기므로 `engine.json`은 바꾸지 않습니다. 게임은 보통 Steam을 거쳐 다시 시작되며 이때 환경 변수가 사라지므로, 스크립트가 실행하는 동안만 게임 폴더에 `steam_appid.txt`를 만들어 바로 실행되게 합니다(원래 있던 파일은 그대로 둡니다). Steam이 켜져 있어야 합니다.
-
-직접 설정하려면 `engine.json`의 성능 시험 설정을 씁니다. `bench`만 켜면 게임 중 Ctrl+Shift+F9로 마지막 웨이브를 바로 발생시키고, `benchAuto`까지 켜면 시작 화면에서 위 생존 게임을 자동으로 시작하고 정해진 시간 뒤 게임을 끕니다. 기록은 `%APPDATA%\TABPerf\bench.csv`에 남습니다.
-
-```json
-{
-  "bench": true,
-  "benchAuto": true,
-  "benchSwarmFactor": 4,
-  "benchSeconds": 240,
-  "benchSwarmDelay": 5,
-  "benchSeed": 20261104
-}
-```
-
-| 키 | 기본값 | 의미 |
-| --- | --- | --- |
-| `bench` | `false` | 성능 시험 모드. Ctrl+Shift+F9 트리거와 초당 기록 |
-| `benchAuto` | `false` | 자동 시험. 생존 게임 자동 시작, 피해 끔, 웨이브 발생, 시간이 되면 게임 종료 |
-| `benchSwarmFactor` | `4` | 마지막 웨이브를 몇 번 발생시킬지(1~20) |
-| `benchSeconds` | `240` | 웨이브 발생 뒤 기록할 시간(초, 30 이상) |
-| `benchSwarmDelay` | `5` | 레벨 시작부터 웨이브 발생까지(초) |
-| `benchSeed` | `20261104` | 생존 게임 맵 시드 |
-| `benchThreads` | 자동 | 물리 작업 스레드 수(`DX_SetOption(0)`). 레벨 시작 때 적용 |
-| `benchZoom` | `"max"` | 자동 시험의 카메라. `max`는 게임이 허용하는 가장 넓은 화면으로 고정, `off`는 손대지 않음 |
-| `benchCsv` | `%APPDATA%\TABPerf\bench.csv` | 초당 기록 파일 경로 |
-
-모든 키는 환경 변수로도 줄 수 있고, 환경 변수가 `engine.json`보다 우선합니다. 켜기/끄기 값은 `1`/`0`, `on`/`off`, `true`/`false`, `yes`/`no`를 받습니다.
-
-| 키 | 환경 변수 |
-| --- | --- |
-| `physicsEngine` | `TABPERF_ENGINE` |
-| `bench` | `TABPERF_BENCH` |
-| `benchAuto` | `TABPERF_BENCH_AUTO` |
-| `benchSwarmFactor` | `TABPERF_BENCH_FACTOR` |
-| `benchSeconds` | `TABPERF_BENCH_SECONDS` |
-| `benchSwarmDelay` | `TABPERF_BENCH_DELAY` |
-| `benchSeed` | `TABPERF_BENCH_SEED` |
-| `benchThreads` | `TABPERF_BENCH_THREADS` |
-| `benchZoom` | `TABPERF_BENCH_ZOOM` |
-| `benchCsv` | `TABPERF_BENCH_CSV` |
-
-자동 시험은 시작 애니메이션이 끝나 입력이 켜지면 카메라를 게임의 최대 축소 폭(마우스 휠로 뺄 수 있는 끝)으로 맞추고 시험 내내 유지합니다. Rapier 판이면 `bench.csv`에 단계 구간별 시간(`r_push_ms` 넣기, `r_step_ms` Rapier 단계, `r_pull_ms` 가져오기, `r_pairs_ms` 접촉 쌍, `r_index_ms` 질의 인덱스)도 남습니다.
+결과는 `bench-out\<날짜-시각>\`에 실행별 CSV와 `summary.csv`로 남습니다. 인자, CSV 열, 실험용 환경 변수, `engine.json`으로 직접 실행하는 방법, 결과 읽는 법은 [성능 시험 문서](docs/BENCH.md)를 보세요.
 
 ### 비교 도구 (`compare.exe`, 장면 3개 × 30단계)
 
@@ -332,10 +308,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bench.ps1 -Engine chipmunk,ra
 
 ```text
 mod/                   C# 엔진 최적화 모드와 모드 정보
+docs/
+├─ BENCH.md             게임 안 성능 시험 사용법
+└─ DEVELOPMENT.md       구현 방식, 측정·실험 결과
 native/
 ├─ chipmunk/            수정된 Chipmunk2D 7.0.0
 ├─ dxphysics/           게임용 물리 API 래퍼, 작업 스레드 풀, 오류 진단
-├─ rapier/              Rapier 물리 DLL (DXPhysicsRapier.c)
+├─ rapier/              Rapier 물리 DLL (DXPhysicsRapier.c), Rapier C 바인딩 패치 (*.patch: 일괄 쓰기, 단계 카운터)
 └─ harness/             원작 DLL과의 비교 도구
 scripts/
 ├─ setup.ps1            게임 확인, TABModLoader 참조 파일 받기(refs/), 모드로더 패치
@@ -364,7 +343,7 @@ LICENSE.txt            패치 코드의 MIT 라이선스
 - 제작·배포: **똘똘똘이 (`ddolddolddol-e`)** — [치지직 채널](https://chzzk.naver.com/1906dd57f578c255feca54700bcccfc9)
 - 패치 코드: [MIT License](LICENSE.txt), Copyright (c) 2026 ddolddolddol-e
 - Chipmunk2D: 별도의 [MIT License](native/chipmunk/LICENSE.txt)
-- Rapier: [Apache License 2.0](https://github.com/dimforge/rapier/blob/master/LICENSE). 저장소에 포함하지 않고 빌드할 때 받습니다. 빌드한 `rapier2d_ffi.dll`·`rapier2d_ffi_avx2.dll`을 배포할 때는 이 라이선스 문구를 함께 넣어야 합니다.
+- Rapier: [Apache License 2.0](https://github.com/dimforge/rapier/blob/master/LICENSE). 저장소에 포함하지 않고 빌드할 때 받습니다. 빌드한 `rapier2d_ffi.dll`·`rapier2d_ffi_avx2.dll`·`rapier2d_ffi_avx512.dll`(`native/rapier/*.patch` 적용)을 배포할 때는 이 라이선스 문구를 함께 넣어야 합니다.
 
 MIT 라이선스 조건에 따라 수정 및 재배포할 수 있으며, 저작권 고지와 라이선스 문구를 유지해야 합니다.
 

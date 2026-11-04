@@ -1,6 +1,6 @@
 # 변경 기록
 
-이 프로젝트의 주요 변경 사항을 기록합니다. 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따릅니다.
+이 프로젝트의 주요 변경 사항을 기록합니다. 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따릅니다. 구현 방식과 측정·실험 결과는 [개발 문서](docs/DEVELOPMENT.md)에 있습니다.
 
 ## [Unreleased]
 
@@ -11,45 +11,37 @@
 ### Rapier 물리 엔진 (`native/rapier/`)
 
 #### 추가
-- `native/rapier/DXPhysicsRapier.c`: 게임이 부르는 물리 함수(원작 DLL과 같은 내보내기)를 Rapier 2D로 구현한 `DXPhysicsNative.dll`입니다. Rapier의 [공식 C 바인딩](https://github.com/dimforge/rapier/tree/master/bindings/c)(0.36.1+c.0, 커밋 고정)을 `rapier2d_ffi.dll`로 같은 폴더에 두고 지연 로드합니다.
-  - 충돌 필터는 원작 래퍼와 같은 규칙(분류/마스크 두 방향 중 하나라도 맞으면 충돌)입니다. Rapier 충돌 그룹의 OR 판정 모드로 엔진 안에서 처리하므로, 쌍마다 C 콜백을 부르지 않습니다.
-  - 충돌 시작·분리 콜백은 Rapier 충돌 이벤트로 만듭니다. 이벤트는 콜백 종류 1인 몸체에만 켜므로, 비용이 접촉 수가 아니라 접촉이 생기고 끊기는 횟수에 비례합니다.
-  - 충돌 시작 콜백이 `false`를 돌려준 쌍은 분리될 때까지 충격을 계산하지 않습니다. 이 판정에 쓰는 접촉 훅은 무시 중인 쌍이 있는 몸체에만 켭니다.
-  - 몸체 잠자기(sleep)를 켭니다. 게임이 같은 값을 다시 쓰면 Rapier에 넘기지 않고, 0에 가까운 속도는 몸체를 깨우지 않고 넘기므로, 멈춘 몸체가 계속 잠들어 있습니다. `DX_RAPIER_SLEEP=0`으로 끌 수 있습니다.
-  - CPUID·XGETBV로 CPU와 OS가 AVX2·FMA를 지원하는지 확인하고, 지원하면 AVX2 빌드를 불러옵니다(지연 로드 훅으로 같은 이름에 연결). `DX_RAPIER_AVX2=0`으로 끌 수 있고, AVX2 빌드 파일이 없으면 기본 빌드를 씁니다. 로그에는 `Rapier 대체본 (AVX2)`로 남습니다(`DX_SetOption(201)`).
-  - 단계가 끝난 뒤에는 Rapier의 활성 몸체 목록에 있는 몸체와, 직전 단계에 깨어 있던 몸체만 한 번에 읽어 옵니다.
-  - 위치·속도가 유한하지 않게 된 몸체를 Rapier가 격리(quarantine)하면, 마지막 정상 위치에서 정지한 상태로 바로 되살립니다. 게임이 넘긴 NaN·무한대 값은 Rapier에 넘기지 않습니다.
-  - 운동학(kinematic) 몸체에도 게임이 정한 속도를 넘깁니다.
-  - Chipmunk처럼 운동학–고정, 운동학–운동학 몸체 사이의 충돌 시작·분리도 알립니다. Rapier는 기본으로 이런 쌍을 건너뛰므로, 콜백 종류 1인 충돌체에만 활성 충돌 종류를 넓힙니다.
-  - 상자 모양은 둥근 상자 대신 테두리만큼 키운 일반 상자로 만듭니다. Rapier 문서상 둥근 상자는 충돌 계산이 느립니다(모서리만 0.05 각지고, 질의는 원래 각진 모서리로 계산합니다).
-  - 접촉 강성(접촉 스프링 주파수)을 게임의 단계 길이에 맞춥니다. Rapier 기본값은 1/60초 단계·하위 단계 4번 기준인데, 게임은 1/12초 단계·하위 단계 10번이라 하위 단계가 두 배 길어 같은 주파수가 두 배 딱딱해집니다. 하위 단계당 강성이 Rapier 기본과 같도록 주파수를 줄이면(지금은 30→15Hz, 고정 몸체 접촉 60→30Hz) 접촉이 덜 튀고 빨라집니다. 밀집 장면 25,000개에서 r2Step이 6~18% 빨라지고, 벽 밖으로 밀려난 몸체가 171/189/1539개에서 7/2/343개로 줄었습니다. `DX_RAPIER_SOFTNESS=0`으로 끌 수 있습니다.
-  - 단계 뒤 상태 가져오기와 질의 인덱스의 경계 상자 계산을 작업 스레드로 나눠 처리합니다. 실제 게임 6~7만 마리에서 두 구간 합계가 9.2 ms에서 7.5 ms로 줄었습니다. 격자 채우기는 순서를 지키려고 한 스레드로 둡니다.
-  - `DX_RAPIER_CCD=0`으로 연속 충돌 검사를 끌 수 있습니다(기본은 켬).
-  - 불러온 Rapier 라이브러리가 릴리스 빌드인지 확인합니다(`r2BuildProfile`, `DX_SetOption(202)`). 디버그 빌드면 로그에 경고를 남깁니다.
-  - 질의(영역·반경·가장 가까운 몸체·레이캐스트·남은 공간)는 단계마다 다시 만드는 자체 격자 인덱스로 처리합니다. 원작 래퍼와 같은 경계 상자 규칙을 쓰고, Rapier 내부 상태를 건드리지 않아 여러 스레드에서 동시에 불러도 안전합니다.
-  - 게임이 매 프레임 읽고 쓰는 위치·속도·힘은 몸체별 원자적 값으로 보관합니다. 그래서 잠금 없이 여러 스레드에서 쓸 수 있고, 다음 단계에 한꺼번에 반영합니다.
-  - 크래시 진단과 모드로더용 코드 패딩(`dx_text_pad`)은 Chipmunk 판과 같은 `dxdiag.c`를 씁니다.
-- Rapier 판 빌드(`scripts\build.ps1 -Target rapier`):
-  - Rapier 저장소를 고정 커밋으로 받고, 필요한 Rust 툴체인(1.99.1)이 없으면 설치합니다.
-  - [공식 문서](https://rapier.rs/docs/user_guides/c/getting_started_c)의 CMake 빌드(`-DRAPIER_DIMENSION=2 -DRAPIER_ENABLE_PARALLEL=ON -DRAPIER_SIMD_LANES=8`)로 C 바인딩을 빌드하고, CMake 통합 테스트(ctest)를 돌립니다.
-  - 같은 옵션으로 AVX2·FMA 빌드(`rapier2d_ffi_avx2.dll`)도 만듭니다. 빌드 PC가 AVX2를 지원하지 않으면 이 빌드의 테스트는 건너뜁니다.
-  - 패딩 위치를 검사합니다.
-- 엔진 모드: `engine.json`의 `"physicsEngine": "rapier"`로 Rapier 판을 씁니다. 로그에 쓰인 엔진을 남깁니다(`DX_SetOption(200)`이 2면 Rapier).
-- 성능 시험 모드(`mod/Bench.cs`, `engine.json`의 `"bench": true`):
-  - Ctrl+Shift+F9로 마지막 웨이브를 바로 발생시킵니다(`benchSwarmFactor`번, 기본 4).
-  - 1초마다 프레임·물리 단계 시간·좀비 수를 `bench.csv`에 남깁니다. Rapier 판이면 단계 구간별 시간도 남깁니다.
-  - `benchAuto`: 시작 화면에서 점수 배율 900% 생존 게임(시드 고정)을 자동으로 시작하고, 카메라를 게임의 최대 축소 폭으로 고정하고(`benchZoom`, 기본 `max`), 피해를 끈 뒤 마지막 웨이브를 발생시키고, 정해진 시간 뒤 게임을 끕니다. `benchThreads`로 물리 작업 스레드 수를 정할 수 있습니다.
-  - 설정마다 환경 변수(`TABPERF_BENCH`, `TABPERF_BENCH_AUTO`, `TABPERF_BENCH_SECONDS` 등, 엔진은 `TABPERF_ENGINE`)로도 켜고 끄거나 값을 줄 수 있고, 환경 변수가 `engine.json`보다 우선합니다(`mod/Settings.cs`). 기록 파일 경로는 `benchCsv`(`TABPERF_BENCH_CSV`)로 바꿀 수 있습니다.
-  - 줌: 전에는 레벨 시작 1~6초 동안 게임의 줌 목표값을 넣었는데, 시작 애니메이션 동안은 카메라 입력이 꺼져 있어 줌이 되지 않을 수 있었습니다. 이제 입력이 켜진 뒤 카메라 폭을 게임의 최대값으로 맞추고 유지합니다(시험에서 24 → 80).
+- `native/rapier/DXPhysicsRapier.c`: 게임이 부르는 물리 함수를 Rapier 2D로 구현한 `DXPhysicsNative.dll`입니다. Rapier [공식 C 바인딩](https://github.com/dimforge/rapier/tree/master/bindings/c)(`rapier2d_ffi.dll`)을 지연 로드합니다. 구조는 [개발 문서](docs/DEVELOPMENT.md#rapier-래퍼-구조) 참고.
+  - 충돌 필터·충돌 시작/분리 콜백·접촉 무시를 Rapier 충돌 그룹과 이벤트로 처리합니다. 운동학 몸체 사이의 충돌도 Chipmunk처럼 알립니다.
+  - 몸체 잠자기(sleep)를 켭니다(`DX_RAPIER_SLEEP=0`으로 끔).
+  - CPU에 맞춰 AVX-512 → AVX2·FMA → 기본 빌드 순으로 골라 불러옵니다(`DX_RAPIER_AVX512=0`, `DX_RAPIER_AVX2=0`).
+  - 몸체 값을 단계마다 한 번의 일괄 호출로 넘깁니다. 실제 게임 5만 마리에서 단계가 60.5 ms에서 약 56 ms로 줄었습니다(`DX_RAPIER_BATCH=0`으로 끔).
+  - 단계 뒤에는 깨어 있는 몸체만 읽어 옵니다. 값이 NaN이 되어 격리된 몸체는 마지막 정상 위치에서 되살립니다.
+  - 접촉 강성을 게임의 긴 단계(1/12초)에 맞춥니다. 밀집 장면에서 단계가 6~18% 빨라지고 벽 밖으로 밀리는 몸체가 크게 줄었습니다(`DX_RAPIER_SOFTNESS=0`으로 끔).
+  - 넣기·가져오기·질의 인덱스를 작업 스레드로 나눠 처리합니다. 결과는 그대로입니다.
+  - 몸체를 만들 때 질의 인덱스 락을 기다리지 않습니다. 좀비 6~7만에서 몸체 하나에 최대 190 µs 걸리던 것이 약 1.7 µs가 되어, 물리 스레드의 대기 작업이 단계당 8.8 ms에서 0.2 ms로 줄었습니다.
+  - 하위 단계(솔버 반복) 수를 몸체가 몰리는 정도에 따라 5~20 사이에서 자동으로 조절합니다. 적으면 몸체가 겹쳐 오히려 느려지기 때문입니다. 실제 게임 6.8만 마리에서 단계가 69.5 ms에서 65.0 ms로 줄었습니다. `DX_RAPIER_ITERATIONS`로 고정하고 `DX_RAPIER_ADAPT=0`으로 끕니다. ([실험](docs/DEVELOPMENT.md#하위-단계-수))
+  - Rapier 내부 구간 시간을 잴 수 있습니다(`DX_RAPIER_COUNTERS=1`, 단계 약 7% 증가, 기본 끔).
+  - 시험용 스위치: 하위 단계 안 반복 수(`DX_RAPIER_PGS`·`DX_RAPIER_STAB`), 접촉 파라미터(`DX_RAPIER_SLOP` 등), CCD 끄기(`DX_RAPIER_CCD=0`), soft CCD(`DX_RAPIER_SOFTCCD`), CCD 나누기(`DX_RAPIER_CCD_SPLIT`). 모두 기본값보다 나은 결과가 없어 기본은 끔입니다. ([실험](docs/DEVELOPMENT.md#성능-실험))
+  - 불러온 Rapier 라이브러리가 디버그 빌드면 로그에 경고를 남깁니다.
+  - 질의(영역·반경·가장 가까운 몸체·레이캐스트·남은 공간)는 자체 격자 인덱스로 처리해 여러 스레드에서 동시에 불러도 안전합니다.
+  - 크래시 진단과 모드로더용 코드 패딩은 Chipmunk 판과 같은 `dxdiag.c`를 씁니다.
+- Rapier 판 빌드(`scripts\build.ps1 -Target rapier`): Rapier를 고정 커밋으로 받아 패치(`native\rapier\*.patch`)를 적용하고, 공식 CMake 빌드로 기본·AVX2·AVX-512 세 가지를 만들어 통합 테스트를 돌립니다. Rust는 fat LTO로 빌드합니다. 패치 목록이 바뀌면 소스를 되돌린 뒤 다시 적용합니다. 16레인 솔버는 8레인과 차이가 없어 뺐습니다. ([상세](docs/DEVELOPMENT.md#rapier-빌드와-패치))
+- 엔진 모드: `engine.json`의 `"physicsEngine": "rapier"`로 Rapier 판을 씁니다. 로그에 쓰인 엔진을 남깁니다.
+- 성능 시험 모드(`mod/Bench.cs`, `engine.json`의 `"bench": true`): 사용법은 [성능 시험 문서](docs/BENCH.md).
+  - Ctrl+Shift+F9로 마지막 웨이브를 바로 발생시킵니다.
+  - 1초마다 프레임·물리 단계·좀비 수와 단계 구간, 게임 쪽 처리, 게임 시계·로직 갱신, CPU 사용량을 CSV에 남깁니다.
+  - `benchAuto`: 900% 생존 게임을 자동으로 시작해 카메라를 최대로 빼고, 피해를 끈 뒤 마지막 웨이브를 발생시키고, 정해진 시간 뒤 게임을 끕니다.
+  - 모든 설정을 환경 변수로도 줄 수 있고, 환경 변수가 `engine.json`보다 우선합니다.
+  - 줌: 시작 애니메이션이 끝나 입력이 켜진 뒤 카메라 폭을 게임의 최대값으로 맞추고 유지합니다. 전에는 애니메이션 중에 줌을 넣어 적용되지 않을 수 있었습니다(시험에서 24 → 80).
 
 ### 물리 DLL 연결과 설치
 
 #### 수정
-- **모드 폴더의 물리 DLL이 쓰이지 않던 문제**: 게임의 `[DllImport("DXPhysicsNative.dll")]`는 .NET Framework가 게임 폴더의 `DXPhysicsNative.dll`에 연결합니다. 그래서 엔진 모드가 모드 폴더의 대체본을 먼저 불러 두어도, 게임은 게임 폴더의 원작 DLL을 따로 불러와 썼습니다. TABModLoader도 네이티브 DLL은 처리하지 않습니다(모드 폴더의 `*.dll`을 .NET 어셈블리로만 열어 봄).
-  - `mod/PhysicsRedirect.cs`: 게임의 물리 선언 47개를 같은 시그니처·마샬링으로, 대체본의 전체 경로를 가리키는 P/Invoke로 실행 중에 다시 만듭니다. 이 선언을 부르는 게임 메서드(`DXPhysicBody`·`DXPhysicWorld`의 36개)의 호출 대상은 Harmony 트랜스파일러로 바꿉니다. 게임 파일은 바꾸지 않습니다.
-  - 게임 폴더 DLL의 함수가 대체본에 모두 있는지 PE 내보내기 표로 확인하고, 하나라도 없거나 패치가 실패하면 모두 되돌려 게임 폴더의 DLL을 씁니다. 두 DLL의 핸들이 섞이지 않도록 하기 위해서입니다.
-  - 실제 게임에서 Rapier와 Chipmunk 모두 확인했습니다. 시험이 끝날 때까지 게임 폴더의 물리 DLL은 불리지 않았고, 단계 시간은 대체본을 게임 폴더에 직접 넣었을 때와 같았습니다.
-- **로그의 물리 DLL 표시**: 게임이 실제로 부르는 DLL(연결한 대체본, 아니면 게임 폴더의 DLL)에서 `DX_SetOption`을 찾습니다. 전에는 모드가 불러 둔 DLL을 보고 표시해, 게임은 원작을 쓰는데 대체본으로 나올 수 있었습니다.
+- **모드 폴더의 물리 DLL이 쓰이지 않던 문제**: 게임은 모드 폴더의 대체본을 불러 두어도 게임 폴더의 원작 DLL을 썼습니다. `mod/PhysicsRedirect.cs`가 게임의 물리 호출을 실행 중에 대체본으로 돌립니다. 게임 파일은 바꾸지 않고, 하나라도 실패하면 모두 되돌려 게임 폴더의 DLL을 씁니다. ([상세](docs/DEVELOPMENT.md#연결-방식))
+- **로그의 물리 DLL 표시**: 게임이 실제로 부르는 DLL을 보고 표시합니다. 전에는 게임이 원작을 쓰는데 대체본으로 나올 수 있었습니다.
+- **물리 계산 중 게임 시계가 멈추던 문제**: 게임 옵션 FastTimming이 꺼져 있으면 원작은 물리 계산 동안 게임 시계를 멈춰, 좀비 7만 마리에서 게임이 0.5배속으로 돌았습니다. 모드가 이 옵션과 상관없이 빠른 타이머 방식으로 게임 시계를 돌립니다. 같은 시험에서 5만 마리까지 1배속, 7만 마리에서 Chipmunk 판 0.92배·Rapier 판 0.82배였습니다. 게임 옵션 값은 바꾸지 않고, `engine.json`의 `"fastTiming": false`로 원래대로 돌립니다. ([상세](docs/DEVELOPMENT.md#게임-시계와-로직-갱신))
+- **게임 물리 호출 비용**: 게임은 좀비마다 단계 앞뒤로 물리 값을 여러 번 읽고 씁니다(7만 마리면 단계당 50만 번이 넘음). 호출마다의 권한 검사를 없애고(`TABPERF_SUCS=0`으로 끔), Rapier 판에서는 단순한 값 읽기·쓰기를 DLL 호출 없이 처리합니다(`TABPERF_FASTBODY=0`으로 끔). 좀비 6~8만에서 단계 앞뒤 처리가 10.1 ms에서 약 3.4 ms로 줄었습니다. ([상세](docs/DEVELOPMENT.md#호출-비용-줄이기))
 
 #### 추가
 - 엔진은 모드 폴더의 `chipmunk\`, `rapier\` 하위 폴더에 둡니다. `engine.json`의 `physicsEngine`으로 `chipmunk`(기본)·`rapier`·`original`을 고릅니다. 고른 엔진을 쓸 수 없으면 Chipmunk 판, 그것도 안 되면 원작 DLL을 씁니다.
@@ -64,7 +56,7 @@
 - Rapier CMake 옵션을 한 표에서 만들어, CMake 인자와 빌드 뒤 캐시 확인이 같은 값을 씁니다.
 
 #### 추가
-- `scripts\bench.ps1`: 게임 안 자동 성능 시험을 엔진별(`-Engine chipmunk,rapier,original`)·회차별(`-Runs`)로 돌리고, 실행별 CSV와 `summary.csv`를 `bench-out\`에 남깁니다. 설정은 환경 변수로 넘기고, 실행하는 동안만 게임 폴더에 `steam_appid.txt`를 둬 게임이 Steam을 거쳐 다시 시작되지 않게 합니다(다시 시작되면 환경 변수가 사라짐).
+- `scripts\bench.ps1`: 게임 안 자동 성능 시험을 엔진별·회차별로 돌리고, 실행별 CSV와 `summary.csv`를 `bench-out\`에 남깁니다. 사용법은 [성능 시험 문서](docs/BENCH.md).
 
 ### 물리 DLL (`native/`)
 
@@ -130,6 +122,7 @@
   - **모드로더 자동 패치**: 게임 실행 파일에 로더(`AX.ModLoader`)가 들어 있는지 확인합니다. 없으면 원본을 `TheyAreBillions.exe.orig`로 보관하고 패치합니다. 다른 로더 버전으로 패치돼 있으면 받은 버전으로 바꿉니다. 게임이 실행 중이거나 쓰기 권한이 없으면 멈추고 안내합니다. 패치 후에는 해시를 검증합니다. `-NoPatch`를 주면 상태만 보여 줍니다.
 - `build-native.ps1`이 링크 맵(`DXPhysicsNative.map`)을 만듭니다. TABModLoader가 덮어쓰는 `+0x13B3`이 `dx_text_pad` 안에 있는지 검사해, 벗어나면 빌드를 실패시킵니다.
 - `compare.exe`는 몸체 수가 병렬 경로 기준(2,048개)보다 적으면, 직렬 경로만 비교한다고 경고합니다.
+- `compare.exe prof <Rapier DLL>`이 Rapier 판의 단계 구간과 내부 구간 시간을 보여 줍니다.
 
 #### 변경
 - 빌드 스크립트를 `scripts/` 폴더로 옮겼습니다: `scripts\build-native.ps1`, `scripts\build-mod.ps1`. 스크립트는 저장소 루트를 기준으로 경로를 찾으므로, 어느 폴더에서 실행해도 됩니다. `README.md`와 `README-SOURCE.txt`의 빌드 명령도 새 경로로 고쳤습니다.
@@ -146,6 +139,11 @@
   - 한글 등 ANSI 경로의 DLL을 열 수 있습니다(`CP_UTF8` 대신 `CP_ACP`).
   - 파일 열기 실패를 처리합니다.
 
+### Rapier 솔버 대기
+
+#### 변경
+- `native/rapier/rapier-solver-park.patch`: Rapier 병렬 솔버가 단계마다 다른 작업 스레드를 기다릴 때 계속 돌지 않고, 2,000번 돈 뒤 잠듭니다(`RAPIER_SYNC_SPIN`, 0이면 원래대로). 실제 게임 좀비 6~9만 마리에서 게임 시간이 3~6% 빨라졌습니다. 자세한 측정은 [개발 문서](docs/DEVELOPMENT.md#솔버-대기)에 있습니다.
+
 ### 알려진 문제
 - 지운 몸체의 분리(separate) 콜백이 원작보다 한 단계 늦게, 다음 `Space_Step`에서 호출됩니다. 이 때문에 README의 "스위치 3·5·6·8을 끄면 원작과 비트 단위로 같다"는 설명은 몸체를 지우는 장면에서 맞지 않습니다.
   - 몸체 12,000개 장면 1에서는 위치·속도는 같고 분리 콜백만 다릅니다.
@@ -156,4 +154,4 @@
   - 충돌 시작 콜백의 `false`는 다음 단계부터 적용됩니다.
   - 콜백은 단계 계산이 끝난 뒤 호출됩니다.
   - 센서끼리의 겹침은 감지하지 않을 수 있습니다.
-  - 게임 안에서는 아직 실행해 보지 않았습니다.
+- 빠른 타이머 조건에서 Rapier 판은 Chipmunk 판보다 게임 로직·렌더링을 2~3배 느리게 합니다(좀비 6만 마리 이상). 원인을 확인하는 중입니다. ([상세](docs/DEVELOPMENT.md#rapier-판에서-로직렌더가-느려짐))

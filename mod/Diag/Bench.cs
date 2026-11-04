@@ -309,7 +309,7 @@ namespace Billions
                     double cores = _cpuWall > 0 ? (cpu - _cpuLast) / ((wall - _cpuWall) * 1000.0 / Stopwatch.Frequency) : 0;
                     _cpuLast = cpu; _cpuWall = wall;
                     game += "," + cores.ToString("0.00", c);
-                    // Rapier wrapper calls this second (DX_SetOption 340-349): Body_SetAngle / SetSize / Dispose / AddSensor
+                    // Rapier wrapper calls this second (DX_SetOption 340-352): Body_SetAngle / SetSize / Dispose / AddSensor
                     // calls and total ms (with the wait for the world lock a step holds), pending index entries per rebuild
                     var lk = new int[13]; for (int k = 0; k < 13; k++) lk[k] = PerfMod.PhysOpt(340 + k, 0);
                     for (int k = 0; k < 8; k += 2) game += "," + lk[k + 1].ToString(c) + "," + (lk[k] / 1000.0).ToString("0.0", c);

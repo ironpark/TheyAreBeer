@@ -91,7 +91,7 @@ namespace Billions
             try { a(); } catch (Exception e) { Log.Error("perf install " + name, e); }
         }
 
-        // Label of the physics DLL the game calls (DX_SetOption: 100 = threads, 200 = backend (2 = Rapier), 201 = AVX2 build,
+        // Label of the physics DLL the game calls (DX_SetOption: 200 = backend (2 = Rapier), 201 = Rapier build (1 AVX2, 2 AVX-512),
         // 202 = release build).
         internal static string PhysicsDll()
         {

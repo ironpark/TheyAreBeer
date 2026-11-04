@@ -53,6 +53,9 @@ function Build-Harness {
 #                                 and value
 #   rapier-c-step-counters.patch  r2StepCounters: the pipeline's stage times of the last step (profiler feature;
 #                                 off until r2SetCountersEnabled)
+#   rapier-solver-park.patch      parallel solver workers sleep after RAPIER_SYNC_SPIN spins instead of spinning
+#   rapier-solver-stats.patch     parallel solver barrier wait / overflow diagnostics (RAPIER_SOLVER_DIAG)
+#   rapier-solver-zorder.patch    solver bodies in Morton order of position, contacts sorted by body within a color
 # The Rust side is built with fat LTO and one codegen unit. CMake's integration tests (ctest) then check the library.
 # DXPhysicsNative.dll is MSVC C only, so dx_text_pad still sits at the start of .text (TABModLoader patches base + 0x13B3);
 # it delay-loads rapier2d_ffi.dll (or the AVX2 / AVX-512 build) from its own folder.

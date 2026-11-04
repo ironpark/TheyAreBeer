@@ -165,6 +165,7 @@ namespace Billions
 
         public static string Str(Dictionary<string, object> d, string k, string def = null) { object v; return d != null && d.TryGetValue(k, out v) && v is string ? (string)v : def; }
         public static int Int(Dictionary<string, object> d, string k, int def = 0) { object v; return d != null && d.TryGetValue(k, out v) && v is double ? (int)Math.Round((double)v) : def; }
+        public static bool Bool(Dictionary<string, object> d, string k, bool def = false) { object v; return d != null && d.TryGetValue(k, out v) && v is bool ? (bool)v : def; }
         public static bool Has(Dictionary<string, object> d, string k) { return d != null && d.ContainsKey(k); }
         public static Dictionary<string, object> Obj(Dictionary<string, object> d, string k) { object v; return d != null && d.TryGetValue(k, out v) ? v as Dictionary<string, object> : null; }
     }

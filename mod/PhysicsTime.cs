@@ -29,7 +29,13 @@ namespace Billions
         static long Cpu() { long c, e, k, u; return GetThreadTimes(GetCurrentThread(), out c, out e, out k, out u) ? k + u : 0; }
         static void SepPre() { System.Threading.Interlocked.Increment(ref SepCalls); }
 
-        static string ConfigPath { get { return Path.Combine(Log.Dir, "engine.json"); } }
+        internal static string ConfigPath { get { return Path.Combine(Log.Dir, "engine.json"); } }
+        // engine.json as read now (null when missing or unreadable); read again each time, so edits apply without a restart
+        internal static System.Collections.Generic.Dictionary<string, object> Config()
+        {
+            try { return File.Exists(ConfigPath) ? MiniJson.Parse(File.ReadAllText(ConfigPath)) as System.Collections.Generic.Dictionary<string, object> : null; }
+            catch (Exception e) { Log.Error("engine.json", e); return null; }
+        }
 
         public static void Install(Harmony h)
         {
@@ -61,14 +67,11 @@ namespace Billions
         {
             try
             {
-                if (File.Exists(ConfigPath))
-                {
-                    var m = MiniJson.Parse(File.ReadAllText(ConfigPath)) as System.Collections.Generic.Dictionary<string, object>;
-                    int it = m != null ? MiniJson.Int(m, "physicsIterations", 0) : 0;
-                    if (it >= 1 && it <= 30) __0 = it;
-                }
+                var m = Config();
+                int it = MiniJson.Int(m, "physicsIterations", 0);
+                if (it >= 1 && it <= 30) __0 = it;
                 Iterations = __0;
-                Log.Info("physics: Init iterations " + __0 + (File.Exists(ConfigPath) ? " (engine.json)" : " (원작)"));
+                Log.Info("physics: Init iterations " + __0 + (m != null ? " (engine.json)" : " (원작)"));
             }
             catch (Exception e) { Log.Error("physics init", e); }
         }

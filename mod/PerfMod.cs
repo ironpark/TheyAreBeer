@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using AX.ModLoader;
 using DXVision;
@@ -31,32 +32,43 @@ namespace Billions
                 var dom = AppDomain.CurrentDomain; object first = dom.GetData(LoadedKey);
                 if (first != null) { Log.Info("이 패치가 이미 다른 폴더에서 실렸다(" + first + ") — 여기(" + (mod != null ? mod.ModPath : "?") + ")는 쉰다"); return; }
                 dom.SetData(LoadedKey, mod != null && mod.ModPath != null ? mod.ModPath : "?");
-                Preload(mod);
-                Install();
+                Install(mod != null ? mod.ModPath : null);
             }
             catch (Exception e) { Log.Error("perf OnLoad", e); }
         }
 
-        [System.Runtime.InteropServices.DllImport("kernel32", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)] static extern IntPtr LoadLibraryW(string path);
-        [System.Runtime.InteropServices.DllImport("kernel32", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] static extern IntPtr GetModuleHandleW(string name);
-        static void Preload(Mod mod)
+        static readonly string[] Engines = { "chipmunk", "rapier" };
+
+        // engine.json {"physicsEngine": "chipmunk" | "rapier" | "original"}, or TABPERF_ENGINE; default chipmunk (the multi-core
+        // Chipmunk replacement).
+        static string PhysicsEngine() { return Settings.Str(PhysicsTime.Config(), "physicsEngine", "TABPERF_ENGINE", "chipmunk").Trim().ToLowerInvariant(); }
+
+        // Sends the game's physics calls to an engine in the mod folder (<mod>\chipmunk\ or <mod>\rapier\, each in its own
+        // folder so the loader does not try it as a .NET assembly and Rapier finds its rapier2d_ffi.dll next to it):
+        // the chosen one, else Chipmunk. Neither usable: the game folder's DLL.
+        static void Redirect(Harmony h, string modPath)
         {
-            try
+            if (modPath == null) return;
+            string engine = PhysicsEngine();
+            if (engine == "original") { Log.Info("물리 엔진 original — 게임 폴더의 물리 DLL 을 쓴다"); return; }
+            if (Array.IndexOf(Engines, engine) < 0) { Log.Info("물리 엔진 \"" + engine + "\" 은 모름 — chipmunk 를 쓴다(chipmunk · rapier · original)"); engine = "chipmunk"; }
+            var order = new List<string> { engine }; if (engine != "chipmunk") order.Add("chipmunk");
+            foreach (var e in order)
             {
-                if (mod == null || mod.ModPath == null) return;
-                string p = Path.Combine(mod.ModPath, "DXPhysicsNative.dll");
-                if (!File.Exists(p)) return;
-                if (GetModuleHandleW("DXPhysicsNative.dll") != IntPtr.Zero) { Log.Info("물리 DLL 이 이미 올라와 있다 — 모드 폴더의 대체본은 쓰지 않음(게임 폴더 쪽이 쓰인다)"); return; }
-                var h = LoadLibraryW(p);
-                Log.Info(h != IntPtr.Zero ? "물리 DLL 대체본을 모드 폴더에서 먼저 올림: " + p : "물리 DLL 대체본 올리기 실패(오류 " + System.Runtime.InteropServices.Marshal.GetLastWin32Error() + ") — 원작 물리 그대로");
+                string dir = Path.Combine(modPath, e), dll = Path.Combine(dir, "DXPhysicsNative.dll");
+                if (!File.Exists(dll)) { Log.Info("모드 폴더에 " + e + "\\DXPhysicsNative.dll 이 없다"); continue; }
+                if (e == "rapier" && !File.Exists(Path.Combine(dir, "rapier2d_ffi.dll"))) { Log.Info("모드 폴더에 rapier\\rapier2d_ffi.dll 이 없다"); continue; }
+                if (PhysicsRedirect.Install(h, dll)) return;
             }
-            catch (Exception e) { Log.Error("physics preload", e); }
+            Log.Info("쓸 수 있는 물리 엔진이 모드 폴더에 없다 — 게임 폴더의 물리 DLL 을 쓴다");
         }
 
-        static void Install()
+        static void Install(string modPath)
         {
             if (_installed) return; _installed = true;
             var h = new Harmony("tabperf.optimization");
+            // first: no physics call may run on the game's DLL once the replacement is in use
+            Step("물리 DLL 연결", () => Redirect(h, modPath));
             Step("전력 연결 번호표", () => EnergyFix.Install(h));
             Step("매끈한 게임 시간", () => SmoothTime.Install(h));
             Step("논리/물리 병렬 동적 분할", () => ParallelFix.Install(h));
@@ -66,6 +78,7 @@ namespace Billions
             Step("소리 장치 다시 켜기 줄이기", () => SoundIdle.Install(h));
             Step("좀비 체력바 옵션", () => { LifeMarkers.Install(h); GameOptions.Install(h); });
             Step("프레임 훅", () => PerfHooks.Install(h));
+            Step("성능 시험 모드", () => Bench.Install(h));
             Log.Info("설치 끝 — 물리 DLL: " + PhysicsDll());
         }
 
@@ -74,14 +87,23 @@ namespace Billions
             try { a(); } catch (Exception e) { Log.Error("perf install " + name, e); }
         }
 
-        static string PhysicsDll()
+        // Label of the physics DLL the game calls (DX_SetOption: 100 = threads, 200 = backend (2 = Rapier), 201 = AVX2 build,
+        // 202 = release build).
+        internal static string PhysicsDll()
         {
-            try { return PhysOpt(100, 0) >= 0 ? "다중 코어 대체본" : "원작"; }
-            catch (EntryPointNotFoundException) { return "원작(대체본 아님 — 패키지의 설치.cmd 로 넣으면 대량 좀비 물리가 빨라진다)"; }
+            try
+            {
+                if (PhysicsRedirect.SetOption == null) return "원작(대체본 아님 — 모드 폴더에 chipmunk\\ 또는 rapier\\ 엔진을 넣으면 대량 좀비 물리가 빨라진다)";
+                if (PhysOpt(200, 0) != 2) return "다중 코어 대체본";
+                string s = "Rapier 대체본";
+                if (PhysOpt(201, 0) == 1) s += " (AVX2)";
+                if (PhysOpt(202, 0) != 1) s += " — 경고: 디버그 빌드 Rapier 라이브러리라 매우 느리다(릴리스로 다시 빌드)";
+                return s;
+            }
             catch (Exception e) { return "확인 못 함: " + e.Message; }
         }
-        [System.Runtime.InteropServices.DllImport("DXPhysicsNative.dll", EntryPoint = "DX_SetOption")]
-        static extern int PhysOpt(int name, int value);
+        // DX_SetOption of the replacement in use; -1 (unknown option) with the game's own DLL, which has none
+        internal static int PhysOpt(int name, int value) { var f = PhysicsRedirect.SetOption; return f != null ? f(name, value) : -1; }
     }
 
     public static class PerfHooks
@@ -98,6 +120,7 @@ namespace Billions
         {
             try { ZSort.Frame(); } catch (Exception e) { Log.Error("zsort frame", e); }
             try { if (ZXLevelState.get_Current() != null) FarField.Frame(); } catch (Exception e) { Log.Error("far frame", e); }
+            if (Bench.Enabled) try { Bench.Frame(); } catch (Exception e) { Log.Error("bench frame", e); }
         }
         static void OnLevelUnloaded()
         {

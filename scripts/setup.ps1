@@ -6,50 +6,19 @@
 #      DXVision.dll, 0Harmony.dll   - from the loader repository's Lib\<version> folder
 # 3. Checks whether the installed game executable is patched by the mod loader and, unless -NoPatch, patches it:
 #      the original is kept as TheyAreBillions.exe.orig next to it (restore it, or verify the game files in Steam, to undo).
-# Then build with scripts\build-native.ps1 and scripts\build-mod.ps1.
+# Then build with scripts\build.ps1 and install with scripts\install.ps1.
 param([string]$GameDir = '', [string]$RefDir = '', [string]$Version = '', [switch]$NoPatch, [switch]$Force)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'lib\game.ps1')
 if (-not $RefDir) { $RefDir = Join-Path $repo 'refs' }
 $api = 'https://codeberg.org/api/v1/repos/JKstring/TABModLoader'
-$steamAppId = 644930
-$exeName = 'TheyAreBillions.exe'
-$loaderMarker = [Text.Encoding]::ASCII.GetBytes('AX.ModLoader')
-
-function Hash($path) { (Get-FileHash $path -Algorithm SHA256).Hash }
-
-# The patched executable carries the loader's assembly (AX.ModLoader); the original game executable does not.
-function Test-LoaderPatched($path) {
-  $s = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($path))
-  return $s.Contains([Text.Encoding]::ASCII.GetString($loaderMarker))
-}
+$exeName = $TabExe
 
 # ---------- 1. game installation ----------
-function Find-Game {
-  $roots = @()
-  foreach ($k in 'HKCU:\Software\Valve\Steam', 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam', 'HKLM:\SOFTWARE\Valve\Steam') {
-    $p = Get-ItemProperty $k -ErrorAction SilentlyContinue
-    foreach ($v in $p.SteamPath, $p.InstallPath) { if ($v) { $roots += ($v -replace '/', '\') } }
-  }
-  $libs = @()
-  foreach ($r in ($roots | Select-Object -Unique)) {
-    $libs += $r
-    $vdf = Join-Path $r 'steamapps\libraryfolders.vdf'
-    if (Test-Path $vdf) { foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) { $libs += ($m.Groups[1].Value -replace '\\\\', '\') } }
-  }
-  foreach ($lib in ($libs | Select-Object -Unique)) {
-    $acf = Join-Path $lib "steamapps\appmanifest_$steamAppId.acf"
-    $dir = $null
-    if ((Test-Path $acf) -and ((Get-Content $acf -Raw) -match '"installdir"\s+"([^"]+)"')) { $dir = Join-Path $lib ('steamapps\common\' + $Matches[1]) }
-    elseif (Test-Path (Join-Path $lib 'steamapps\common\They Are Billions')) { $dir = Join-Path $lib 'steamapps\common\They Are Billions' }
-    if ($dir -and (Test-Path (Join-Path $dir $exeName))) { return $dir }
-  }
-  return $null
-}
-
 if ($GameDir) {
   if (-not (Test-Path (Join-Path $GameDir $exeName))) { throw "$exeName not found in -GameDir $GameDir" }
 } else {
@@ -143,4 +112,4 @@ try {
 }
 finally { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 
-Write-Host 'OK. Next: scripts\build-native.ps1, then scripts\build-mod.ps1'
+Write-Host 'OK. Next: scripts\build.ps1, then scripts\install.ps1'

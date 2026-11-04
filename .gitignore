@@ -25,3 +25,6 @@ DXVision.dll
 ._*
 Thumbs.db
 Desktop.ini
+
+# Benchmark results (scripts/bench.ps1)
+/bench-out/

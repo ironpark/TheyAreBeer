@@ -1,0 +1,86 @@
+diff --git a/src/dynamics/solver/staged_island_solver/sync.rs b/src/dynamics/solver/staged_island_solver/sync.rs
+index 1eec4ab..d8ed70b 100644
+--- a/src/dynamics/solver/staged_island_solver/sync.rs
++++ b/src/dynamics/solver/staged_island_solver/sync.rs
+@@ -48,6 +48,30 @@ pub(super) struct StageSync {
+     /// when this reaches the stage's total (every unit claimed *and* executed).
+     completed: AtomicUsize,
+     cursors: Vec<PaddedCursor>,
++    /// Workers parked in [`Self::sync`] (only with `RAPIER_SYNC_SPIN` set; see [`sync_spin_limit`]).
++    #[cfg(feature = "std")]
++    parked: std::sync::Mutex<Vec<std::thread::Thread>>,
++}
++
++/// Spins before a waiting worker parks, from the `RAPIER_SYNC_SPIN` environment variable (read
++/// once). 0 (unset): spin, yielding every 10,000 spins, never parking. Spinning workers keep
++/// their cores busy while other threads of the process (a game's logic and rendering) could use
++/// them; parking hands the core back at the price of a wake-up per stage.
++#[cfg(feature = "std")]
++fn sync_spin_limit() -> u32 {
++    use core::sync::atomic::AtomicU32;
++    static LIMIT: AtomicU32 = AtomicU32::new(u32::MAX);
++    let v = LIMIT.load(Ordering::Relaxed);
++    if v != u32::MAX {
++        return v;
++    }
++    let n = std::env::var("RAPIER_SYNC_SPIN")
++        .ok()
++        .and_then(|s| s.trim().parse::<u32>().ok())
++        .filter(|&n| n < u32::MAX)
++        .unwrap_or(0);
++    LIMIT.store(n, Ordering::Relaxed);
++    n
+ }
+ 
+ impl StageSync {
+@@ -60,6 +84,8 @@ impl StageSync {
+             cursors: (0..num_workers)
+                 .map(|_| PaddedCursor(AtomicCursor::new(0)))
+                 .collect(),
++            #[cfg(feature = "std")]
++            parked: std::sync::Mutex::new(Vec::new()),
+         }
+     }
+ 
+@@ -94,6 +120,16 @@ impl StageSync {
+         }
+         self.completed.store(0, Ordering::Relaxed);
+         self.published.store(next, Ordering::Release);
++        // Wake the parked waiters. A waiter registers under the lock and re-checks `published`
++        // before parking, so it either sees this publish or is in the list drained here.
++        #[cfg(feature = "std")]
++        if sync_spin_limit() > 0 {
++            if let Ok(mut parked) = self.parked.lock() {
++                for t in parked.drain(..) {
++                    t.unpark();
++                }
++            }
++        }
+     }
+ 
+     /// Ends the caller's stage `stage` (total `stage_work`); returns the next stage ordinal.
+@@ -114,9 +150,24 @@ impl StageSync {
+         }
+ 
+         let mut spins = 0u32;
++        #[cfg(feature = "std")]
++        let park_after = sync_spin_limit();
+         while self.published.load(Ordering::Acquire) == stage {
+             core::hint::spin_loop();
+             spins += 1;
++            #[cfg(feature = "std")]
++            if park_after > 0 && spins >= park_after {
++                spins = 0;
++                if let Ok(mut parked) = self.parked.lock() {
++                    if self.published.load(Ordering::Acquire) != stage {
++                        break;
++                    }
++                    parked.push(std::thread::current());
++                }
++                // A timeout bounds a missed wake-up; a stale unpark only makes a later park return early.
++                std::thread::park_timeout(core::time::Duration::from_micros(500));
++                continue;
++            }
+             if spins > 10_000 {
+                 // Only reachable with >1 worker (a single worker never waits on
+                 // another), so `std` is always available here in practice; the

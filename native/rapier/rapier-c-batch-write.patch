@@ -1,0 +1,88 @@
+diff --git a/bindings/c/src/handle_access.rs b/bindings/c/src/handle_access.rs
+index 3dec677..223ba9c 100644
+--- a/bindings/c/src/handle_access.rs
++++ b/bindings/c/src/handle_access.rs
+@@ -1770,3 +1770,83 @@ pub unsafe extern "C" fn rpr_rigid_body_set_allow_fast_rotation(
+         ))
+     })
+ }
++
++/// Write request for rpr_rigid_body_write_states: the values whose RPR_BODY_WRITE_* bit is set in flags.
++/// @ingroup rigid_bodies
++#[repr(C)]
++#[derive(Clone, Copy)]
++pub struct RprRigidBodyWrite {
++    /// Target body.
++    pub handle: RprRigidBodyHandle,
++    /// RPR_BODY_WRITE_* bits: which values to set, and for each whether setting it wakes the body.
++    pub flags: u32,
++    /// World-space pose (RPR_BODY_WRITE_POSITION).
++    pub position: RprPose,
++    /// World-space linear velocity (RPR_BODY_WRITE_LINVEL).
++    pub linvel: RprVector,
++    /// World-space angular velocity in radians per second (RPR_BODY_WRITE_ANGVEL).
++    pub angvel: RprAngVector,
++}
++/// Set the pose.
++pub const RPR_BODY_WRITE_POSITION: u32 = 1;
++/// Set the linear velocity.
++pub const RPR_BODY_WRITE_LINVEL: u32 = 2;
++/// Set the angular velocity.
++pub const RPR_BODY_WRITE_ANGVEL: u32 = 4;
++/// Setting the pose wakes the body.
++pub const RPR_BODY_WRITE_WAKE_POSITION: u32 = 8;
++/// Setting the linear velocity wakes the body.
++pub const RPR_BODY_WRITE_WAKE_LINVEL: u32 = 16;
++/// Setting the angular velocity wakes the body.
++pub const RPR_BODY_WRITE_WAKE_ANGVEL: u32 = 32;
++
++/// Applies many rigid-body writes under one world borrow, in order; the same as calling
++/// rpr_rigid_body_set_position / _set_linvel / _set_angvel for each set bit.
++/// All handles and values are validated before anything is written: on error nothing changes.
++/// @ingroup rigid_bodies
++#[rapier_export(rigid_body)]
++pub unsafe extern "C" fn rpr_rigid_body_write_states(
++    world: *mut RprWorld,
++    writes: *const RprRigidBodyWrite,
++    count: usize,
++) -> RprStatus {
++    ffi(|| unsafe {
++        let writes = input(writes, count)?;
++        for w in writes {
++            w.handle.check_world(world)?;
++        }
++        let access = get(world)?.write()?;
++        let raw = access.raw();
++        let set: *mut RprRigidBodySet = std::ptr::addr_of_mut!((*raw).0.bodies).cast();
++        let bodies = &mut get_mut(set)?.0;
++        for w in writes {
++            let body = bodies.get(w.handle.raw()).ok_or_else(missing)?;
++            ensure(
++                body.soft_body().is_none(),
++                "mutate soft-body proxies through the soft-body API",
++            )?;
++            if w.flags & RPR_BODY_WRITE_POSITION != 0 {
++                w.position.raw()?;
++            }
++            if w.flags & RPR_BODY_WRITE_LINVEL != 0 {
++                w.linvel.raw()?;
++            }
++            if w.flags & RPR_BODY_WRITE_ANGVEL != 0 {
++                angular(w.angvel)?;
++            }
++        }
++        for w in writes {
++            let body = &mut bodies[w.handle.raw()];
++            if w.flags & RPR_BODY_WRITE_POSITION != 0 {
++                body.set_position(w.position.raw()?, w.flags & RPR_BODY_WRITE_WAKE_POSITION != 0);
++            }
++            if w.flags & RPR_BODY_WRITE_LINVEL != 0 {
++                body.set_linvel(w.linvel.raw()?, w.flags & RPR_BODY_WRITE_WAKE_LINVEL != 0);
++            }
++            if w.flags & RPR_BODY_WRITE_ANGVEL != 0 {
++                body.set_angvel(angular(w.angvel)?, w.flags & RPR_BODY_WRITE_WAKE_ANGVEL != 0);
++            }
++        }
++        Ok(())
++    })
++}

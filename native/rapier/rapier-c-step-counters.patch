@@ -1,0 +1,65 @@
+diff --git a/bindings/c/src/pipeline.rs b/bindings/c/src/pipeline.rs
+index f77700d..6c08a06 100644
+--- a/bindings/c/src/pipeline.rs
++++ b/bindings/c/src/pipeline.rs
+@@ -2313,6 +2313,60 @@ pub unsafe extern "C" fn rpr_step_time_ms(world: *const RprWorld) -> f64 {
+     })
+ }
+ 
++/// Number of values rpr_step_counters writes.
++pub const RPR_STEP_COUNTER_COUNT: usize = 20;
++
++/// Stage times of the most recent step in milliseconds, then counts, from the native pipeline
++/// counters (enable them with rpr_set_counters_enabled before stepping; all zero otherwise):
++///  0 step, 1 user changes, 2 update, 3 collision detection, 4 broad phase, 5 final broad phase,
++///  6 narrow phase, 7 island construction, 8 island constraint collection, 9 solver,
++///  10 velocity assembly, 11 velocity assembly (solver bodies), 12 velocity assembly (constraint
++///  init), 13 velocity resolution, 14 velocity update, 15 velocity writeback, 16 CCD,
++///  17 contact pairs, 18 constraints, 19 contacts.
++/// count receives RPR_STEP_COUNTER_COUNT; a null buffer with capacity zero is a size query.
++/// @ingroup worlds
++#[rapier_export]
++pub unsafe extern "C" fn rpr_step_counters(
++    world: *const RprWorld,
++    buffer: *mut f64,
++    capacity: usize,
++    count: *mut usize,
++) -> RprStatus {
++    ffi(|| unsafe {
++        let access = get(world)?.read()?;
++        let raw = access.raw();
++
++        let pipeline: *const RprPhysicsPipeline =
++            std::ptr::addr_of!((*raw).0.physics_pipeline).cast();
++        let c = &get(pipeline)?.0.counters;
++        let on = c.enabled();
++        let t = |timer: &rapier::counters::Timer| if on { timer.time_ms() } else { 0.0 };
++        let values: [f64; RPR_STEP_COUNTER_COUNT] = [
++            c.step_time_ms(),
++            t(&c.stages.user_changes),
++            t(&c.stages.update_time),
++            t(&c.stages.collision_detection_time),
++            t(&c.cd.broad_phase_time),
++            t(&c.cd.final_broad_phase_time),
++            t(&c.cd.narrow_phase_time),
++            t(&c.stages.island_construction_time),
++            t(&c.stages.island_constraints_collection_time),
++            t(&c.stages.solver_time),
++            t(&c.solver.velocity_assembly_time),
++            t(&c.solver.velocity_assembly_time_solver_bodies),
++            t(&c.solver.velocity_assembly_time_constraints_init),
++            t(&c.solver.velocity_resolution_time),
++            t(&c.solver.velocity_update_time),
++            t(&c.solver.velocity_writeback_time),
++            t(&c.stages.ccd_time),
++            c.cd.ncontact_pairs as f64,
++            c.solver.nconstraints as f64,
++            c.solver.ncontacts as f64,
++        ];
++        copy_out(&values, buffer, capacity, count)
++    })
++}
++
+ /// Read ONLY trusted legacy rigid-world snapshots from debug_deserialize3.rs,
+ /// produced by the identical Rapier build. This is not a stable interchange format.
+ ///

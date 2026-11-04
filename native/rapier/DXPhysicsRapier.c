@@ -30,6 +30,7 @@
 #include <intrin.h>
 #include <delayimp.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include "rapier.h"
@@ -91,6 +92,7 @@ struct DxBody {
 	int slot;                 /* index in g_bodies */
 	LONG64 rpos, rvel; LONG rangle, rangvel;   /* what Rapier holds (pulled or pushed last) */
 	unsigned pulled;          /* step stamp of the last pull */
+	int appCcd;               /* CCD split tier last given to Rapier: 0 none, 1 bullet, 2 soft */
 };
 
 typedef struct { unsigned long long a, b; int ignore; } DxPair;   /* a = type-1 shape, b = type-0 shape */
@@ -99,7 +101,7 @@ typedef struct {
 	int n;
 	DxShape **it;
 	float *bb;                /* 4 per item */
-	int *ix0, *iy0;
+	int *ix0, *iy0, *ix1, *iy1;   /* cell range per item (ix0 = -1: in the big list) */
 	float cell; int gx0, gy0, gw, gh;
 	int *cs, *ci;             /* cell start (gw*gh+1), cell items */
 	int *big; int nbig;       /* items spanning too many cells */
@@ -115,7 +117,7 @@ static DXSeparationCallback g_separation;
 static DxBody **g_bodies; static int g_nbodies, g_capbodies;
 static DxShape **g_byIndex; static unsigned g_capIndex;       /* collider index -> shape */
 static DxShape **g_allShapes; static int g_nshapes, g_capshapes;
-static DxShape **g_pending; static int g_npending, g_cappending;
+static DxShape **g_pending; static volatile LONG g_npending; static int g_cappending;   /* see index_add */
 static DxIndex *g_idx;
 static void **g_grave; static int g_ngrave, g_capgrave;         /* records freed after the next index swap */
 static DxPair *g_pairs; static int g_npairs, g_cappairs;
@@ -123,8 +125,10 @@ static DxBody **g_awake; static int g_nawake;                  /* bodies pulled 
 static float g_dt = 1.0f / 12.0f, g_damping = 0.0f;
 static int g_threads = -1, g_threads_explicit;
 static volatile LONG g_steps;
-/* Step section timings (microseconds, accumulated): read with DX_SetOption(300 + k), reset with DX_SetOption(399, 0). */
-static double g_prof[8]; static double g_qpc_us;
+/* Step section timings (microseconds, accumulated; 305 = steps, 306 = quarantined bodies, 307 = body writes, 308 = solver
+   substeps, 309 = contact pairs): read with DX_SetOption(300 + k), reset with DX_SetOption(399, 0). */
+#define DX_NPROF 10
+static double g_prof[DX_NPROF]; static double g_qpc_us;
 static double now_us(void) { LARGE_INTEGER c; if (!g_qpc_us) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qpc_us = (double)f.QuadPart / 1e6; } QueryPerformanceCounter(&c); return (double)c.QuadPart / g_qpc_us; }
 
 /* Rapier copy-out calls return the full count: grow the buffer and call again when it did not fit. */
@@ -141,21 +145,56 @@ static int env_int(const char *name, int lo, int hi, int def)
 	return end != t && *end == 0 && v >= lo && v <= hi ? (int)v : def;
 }
 
+/* Float environment switch in [lo, hi]; def when unset or malformed. */
+static float env_float(const char *name, float lo, float hi, float def)
+{
+	char t[32]; DWORD len = GetEnvironmentVariableA(name, t, sizeof t);
+	if (len == 0 || len >= sizeof t) return def;
+	char *end; double v = strtod(t, &end);
+	return end != t && *end == 0 && v >= lo && v <= hi ? (float)v : def;
+}
+
 /* ---------- loading the Rapier library from this DLL's folder (it is delay-loaded as rapier2d_ffi.dll) ---------- */
-/* rapier2d_ffi_avx2.dll is the same library built for AVX2 + FMA (8-lane SIMD solver); it is used only when the CPU
-   and the OS support it (DX_RAPIER_AVX2=0 forces the baseline SSE2 build, rapier2d_ffi.dll). */
-static int cpu_avx2(void)
+/* rapier2d_ffi_avx2.dll and rapier2d_ffi_avx512.dll are the same library built for AVX2 + FMA and for AVX-512 (F, VL,
+   BW, DQ, CD) on top (all with the 8-lane SIMD solver). The highest level the CPU and the OS support is used;
+   DX_RAPIER_AVX512=0 stops at AVX2, DX_RAPIER_AVX2=0 forces the baseline SSE2 build (rapier2d_ffi.dll). */
+enum { SIMD_BASE = 0, SIMD_AVX2 = 1, SIMD_AVX512 = 2 };
+static int cpu_simd(void)
 {
 	int r[4];
-	__cpuid(r, 0); if (r[0] < 7) return 0;
+	__cpuid(r, 0); if (r[0] < 7) return SIMD_BASE;
 	__cpuid(r, 1);
-	if (!((r[2] >> 12) & 1) || !((r[2] >> 27) & 1) || !((r[2] >> 28) & 1)) return 0;   /* FMA, OSXSAVE, AVX */
-	if ((_xgetbv(0) & 6) != 6) return 0;                                               /* OS saves XMM + YMM */
+	if (!((r[2] >> 12) & 1) || !((r[2] >> 27) & 1) || !((r[2] >> 28) & 1)) return SIMD_BASE;   /* FMA, OSXSAVE, AVX */
+	unsigned long long xcr0 = _xgetbv(0);
+	if ((xcr0 & 6) != 6) return SIMD_BASE;                                                     /* OS saves XMM + YMM */
 	__cpuidex(r, 7, 0);
-	return (r[1] >> 5) & 1;                                                            /* AVX2 */
+	if (!((r[1] >> 5) & 1)) return SIMD_BASE;                                                  /* AVX2 */
+	unsigned need = (1u << 16) | (1u << 17) | (1u << 28) | (1u << 30) | (1u << 31);              /* AVX512 F, DQ, CD, BW, VL */
+	if (((unsigned)r[1] & need) == need && (xcr0 & 0xE0) == 0xE0) return SIMD_AVX512;          /* OS saves opmask + ZMM */
+	return SIMD_AVX2;
 }
 static HMODULE g_rapier_mod;
-static int g_rapier_avx2, g_rapier_release;
+static int g_rapier_simd, g_rapier_release;
+/* Batch body writes (native\rapier\rapier-c-batch-write.patch on the C bindings; not in the official header). Looked up
+   at load time, so a Rapier library without it still works through the one-call-per-value path. */
+typedef struct DxBodyWrite {
+	struct R2RigidBodyHandle handle;
+	uint32_t flags;            /* BW_* */
+	struct R2Pose position;
+	struct R2Vector linvel;
+	R2Real angvel;
+} DxBodyWrite;
+enum { BW_POS = 1, BW_LINVEL = 2, BW_ANGVEL = 4, BW_WAKE_POS = 8, BW_WAKE_LINVEL = 16, BW_WAKE_ANGVEL = 32, BW_RAPIER = 63,
+       BW_SYNC = 1 << 16, BW_MASS = 1 << 17 };   /* the last two stay on this side: flag sync, mass change */
+typedef R2Status (RAPIER_CALL *DxWriteStatesFn)(struct R2World *world, const DxBodyWrite *writes, size_t count);
+static DxWriteStatesFn g_write_states;   /* NULL: not in the loaded library, or DX_RAPIER_BATCH=0 */
+/* Stage times of the last step (native\rapier\rapier-c-step-counters.patch; profiler feature). Counted per step into
+   g_cnt while on: DX_SetOption(204, 1) or DX_RAPIER_COUNTERS=1; read with DX_SetOption(310 + k), reset with 399. */
+#define DX_NCOUNTERS 20
+typedef R2Status (RAPIER_CALL *DxStepCountersFn)(const struct R2World *world, double *buffer, size_t capacity, size_t *count);
+static DxStepCountersFn g_step_counters;
+static int g_counters_want = -1, g_counters_on;
+static double g_cnt[DX_NCOUNTERS];
 /* The delay-load helper asks before loading rapier2d_ffi.dll: hand it the variant chosen above. */
 static FARPROC WINAPI dl_hook(unsigned note, PDelayLoadInfo li)
 {
@@ -173,15 +212,30 @@ static int load_rapier(void)
 	DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
 	wchar_t *slash = wcsrchr(path, L'\\');
 	g_rapier_ok = 0;
-	if (!n || !slash || (size_t)(slash - path) + 22 >= MAX_PATH) return 0;
-	if (cpu_avx2() && env_int("DX_RAPIER_AVX2", 0, 1, 1))
+	if (!n || !slash || (size_t)(slash - path) + 24 >= MAX_PATH) return 0;
+	/* Rapier's parallel solver waits for each stage by spinning (rapier-solver-park.patch makes it park after
+	   RAPIER_SYNC_SPIN spins). 17 spinning workers per stage, 20 substeps a step, slowed the game's logic and rendering
+	   threads; parking after 2,000 spins gave, with 60,000-90,000 zombies in the game, 4-6% shorter steps, lighter
+	   frames and logic, and a 3-6% faster game clock (r2Step +4% in the harness, with no other load). Set before the
+	   library reads it; RAPIER_SYNC_SPIN=0 keeps the spinning. */
+	{ char t[16]; if (!GetEnvironmentVariableA("RAPIER_SYNC_SPIN", t, sizeof t)) SetEnvironmentVariableA("RAPIER_SYNC_SPIN", "2000"); }
+	int level = env_int("DX_RAPIER_AVX2", 0, 1, 1) ? cpu_simd() : SIMD_BASE;
+	if (level == SIMD_AVX512 && !env_int("DX_RAPIER_AVX512", 0, 1, 1)) level = SIMD_AVX2;
+	static const wchar_t *const names[] = { L"rapier2d_ffi.dll", L"rapier2d_ffi_avx2.dll", L"rapier2d_ffi_avx512.dll" };
+	for (int k = level; k >= SIMD_BASE && !g_rapier_mod; k--)   /* a missing variant falls back to the next lower one */
 	{
-		wcscpy(slash + 1, L"rapier2d_ffi_avx2.dll");
-		if ((g_rapier_mod = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH)) != NULL) g_rapier_avx2 = 1;
+		wcscpy(slash + 1, names[k]);
+		if ((g_rapier_mod = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH)) != NULL) g_rapier_simd = k;
 	}
-	if (!g_rapier_mod) { wcscpy(slash + 1, L"rapier2d_ffi.dll"); g_rapier_mod = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH); }
 	if (g_rapier_mod)
 		g_rapier_ok = r2CheckAbi(R2_ABI_VERSION, R2_DIMENSION, sizeof(R2Real), sizeof(struct R2Vector), sizeof(struct R2Pose), R2_ABI_FEATURES) == R2_OK;
+	/* r2RigidBody_WriteStates (rigid_body receiver, like r2RigidBody_SetLinvel); r2RigidBodyWriteStates in earlier patch builds */
+	if (g_rapier_ok && env_int("DX_RAPIER_BATCH", 0, 1, 1))
+	{
+		g_write_states = (DxWriteStatesFn)(void *)GetProcAddress(g_rapier_mod, "r2RigidBody_WriteStates");
+		if (!g_write_states) g_write_states = (DxWriteStatesFn)(void *)GetProcAddress(g_rapier_mod, "r2RigidBodyWriteStates");
+	}
+	if (g_rapier_ok) g_step_counters = (DxStepCountersFn)(void *)GetProcAddress(g_rapier_mod, "r2StepCounters");
 	/* An unoptimized (debug) Rapier is about 100x slower; it still runs, and the mod log warns (DX_SetOption(202)). */
 	if (g_rapier_ok) { const char *prof = r2BuildProfile(); g_rapier_release = prof && strcmp(prof, "release") == 0; }
 	return g_rapier_ok;
@@ -328,9 +382,25 @@ static void shape_ignore(DxShape *s, int delta)
 	int was = s->nignore > 0; s->nignore += delta; if (s->nignore < 0) s->nignore = 0;
 	if (was != (s->nignore > 0)) r2Collider_SetActiveHooks(s->h, s->nignore > 0 ? R2_FILTER_CONTACT_PAIRS : 0);
 }
+/* CCD split (experiment, DX_RAPIER_CCD_SPLIT=1): dynamic bodies whose category has a DX_RAPIER_CCD_HARDCAT bit (default
+   0x200000, the game's zombies) become bullets, which also sweep against non-bullet dynamic bodies (Rapier never sweeps
+   bullets against each other); the other dynamic bodies get soft CCD (DX_RAPIER_SOFTCCD, default 1 here). Every fast
+   dynamic body still sweeps against fixed colliders, as without the split. */
+static int g_ccd_split; static unsigned g_ccd_hardcat; static float g_ccd_split_soft;
+static void sync_ccd(DxBody *b)
+{
+	if (!g_ccd_split || b->type != 2) return;
+	LONG cat = 0; for (DxShape *s = b->shapes; s; s = s->next) if (!s->sensor) cat |= s->cat;
+	int tier = ((unsigned)cat & g_ccd_hardcat) ? 1 : 2;
+	if (tier == b->appCcd) return;
+	r2RigidBody_SetCcdEnabled(b->h, (R2Bool)(tier == 1));
+	r2RigidBody_SetSoftCcdPrediction(b->h, tier == 2 ? g_ccd_split_soft : 0.0f);
+	b->appCcd = tier;
+}
 /* Groups and events follow the game's lock-free cat/mask/ctype writes; applied before each step. */
 static void sync_flags(DxBody *b)
 {
+	sync_ccd(b);
 	for (DxShape *s = b->shapes; s; s = s->next)
 	{
 		LONG cat = s->cat, mask = s->mask, ev = s->ctype == 1 ? R2_COLLISION_EVENTS : 0;
@@ -350,38 +420,115 @@ static void sync_flags(DxBody *b)
 static void index_free(DxIndex *x)
 {
 	if (!x) return;
-	free(x->it); free(x->bb); free(x->ix0); free(x->iy0); free(x->cs); free(x->ci); free(x->big); free(x);
+	free(x->it); free(x->bb); free(x->ix0); free(x->iy0); free(x->ix1); free(x->iy1); free(x->cs); free(x->ci); free(x->big); free(x);
 }
-struct bbjob { float *bb; };
-static void bb_range(void *ctx, int begin, int end, int worker)
+/* The index is built in parallel passes over fixed blocks of shapes and items. The result is the same as one serial
+   pass: live shapes keep their order, items are in shape order, and each cell lists its items in ascending order. */
+#define IDX_BLOCK 4096
+static DxShape **g_allShapes2; static int g_capshapes2;   /* the live shapes of the next build */
+struct idxjob {
+	DxIndex *x; int n;
+	unsigned char *state;     /* per shape: 0 dead, 1 live without a finite box, 2 indexed */
+	float *tmp;               /* per shape box */
+	int *nlive, *nkeep;       /* per block: counts, then output offsets */
+	float *mm;                /* per block: min x, min y, max x, max y of the finite boxes */
+	int *fill;                /* per cell: items placed so far */
+};
+static int cell_of(float v, float cell, int origin) { return (int)floorf(v / cell) - origin; }
+static void idx_boxes(void *ctx, int begin, int end, int worker)
 {
-	(void)worker; float *out = ((struct bbjob *)ctx)->bb;
-	for (int i = begin; i < end; i++) { DxShape *s = g_allShapes[i]; float px, py, a; body_pose(s->body, &px, &py, &a); shape_bb(s, px, py, a, &out[4 * i]); }
+	(void)worker; struct idxjob *j = (struct idxjob *)ctx; int blk = begin / IDX_BLOCK, nl = 0, nk = 0;
+	float mm[4] = { INFINITY, INFINITY, -INFINITY, -INFINITY };
+	for (int i = begin; i < end; i++)
+	{
+		DxShape *s = g_allShapes[i];
+		if (s->dead) { j->state[i] = 0; continue; }
+		nl++;
+		float *bb = &j->tmp[4 * i], px, py, a; body_pose(s->body, &px, &py, &a); shape_bb(s, px, py, a, bb);
+		if (!(isfinite(bb[0]) && isfinite(bb[1]) && isfinite(bb[2]) && isfinite(bb[3]))) { j->state[i] = 1; continue; }
+		j->state[i] = 2; nk++;
+		if (bb[0] < mm[0]) mm[0] = bb[0]; if (bb[1] < mm[1]) mm[1] = bb[1]; if (bb[2] > mm[2]) mm[2] = bb[2]; if (bb[3] > mm[3]) mm[3] = bb[3];
+	}
+	j->nlive[blk] = nl; j->nkeep[blk] = nk; memcpy(&j->mm[4 * blk], mm, sizeof mm);
 }
+static void idx_place(void *ctx, int begin, int end, int worker)
+{
+	(void)worker; struct idxjob *j = (struct idxjob *)ctx; DxIndex *x = j->x; int blk = begin / IDX_BLOCK;
+	int ol = j->nlive[blk], ok = j->nkeep[blk];
+	for (int i = begin; i < end; i++)
+	{
+		if (!j->state[i]) continue;
+		DxShape *s = g_allShapes[i]; g_allShapes2[ol++] = s;
+		if (j->state[i] != 2) continue;
+		float *bb = &x->bb[4 * ok]; memcpy(bb, &j->tmp[4 * i], 4 * sizeof(float));
+		memcpy(s->bb, bb, sizeof s->bb); s->pending = 0;
+		x->it[ok++] = s;
+	}
+}
+/* cell range per item; one spanning more than 256 cells goes to the big list instead (ix0 = -1) */
+static void idx_range(void *ctx, int begin, int end, int worker)
+{
+	(void)worker; DxIndex *x = ((struct idxjob *)ctx)->x; float cell = x->cell;
+	for (int i = begin; i < end; i++)
+	{
+		const float *bb = &x->bb[4 * i];
+		int x0 = cell_of(bb[0], cell, x->gx0), y0 = cell_of(bb[1], cell, x->gy0), x1 = cell_of(bb[2], cell, x->gx0), y1 = cell_of(bb[3], cell, x->gy0);
+		x->ix0[i] = x0; x->iy0[i] = y0; x->ix1[i] = x1; x->iy1[i] = y1;
+		if ((long long)(x1 - x0 + 1) * (y1 - y0 + 1) > 256) x->ix0[i] = -1;
+	}
+}
+/* Counting and filling go by column strips: each part owns the cells of its columns and walks all items in order, so
+   no cell is shared between workers and each cell's items come out ascending. */
+#define IDX_PARTS 32
+static void idx_strip(struct idxjob *j, int part, int fill)
+{
+	DxIndex *x = j->x; int c0 = (int)((long long)x->gw * part / IDX_PARTS), c1 = (int)((long long)x->gw * (part + 1) / IDX_PARTS) - 1;
+	if (c0 > c1) return;
+	int gh = x->gh, *cs = x->cs, *ci = x->ci, *fl = j->fill;
+	for (int i = 0; i < x->n; i++)
+	{
+		int x0 = x->ix0[i], x1 = x->ix1[i];
+		if (x0 < 0 || x1 < c0 || x0 > c1) continue;
+		if (x0 < c0) x0 = c0; if (x1 > c1) x1 = c1;
+		int y0 = x->iy0[i], y1 = x->iy1[i];
+		for (int gx = x0; gx <= x1; gx++) for (int gy = y0; gy <= y1; gy++)
+		{
+			int c = gx * gh + gy;
+			if (fill) ci[cs[c] + fl[c]++] = i; else cs[c + 1]++;
+		}
+	}
+}
+static void idx_count(void *ctx, int begin, int end, int worker) { (void)worker; for (int k = begin; k < end; k++) idx_strip((struct idxjob *)ctx, k, 0); }
+static void idx_fill(void *ctx, int begin, int end, int worker) { (void)worker; for (int k = begin; k < end; k++) idx_strip((struct idxjob *)ctx, k, 1); }
 static DxIndex *index_build(void)
 {
 	DxIndex *x = (DxIndex *)calloc(1, sizeof(DxIndex)); if (!x) abort();
-	int n = 0;
-	x->it = (DxShape **)malloc(sizeof(DxShape *) * (g_nshapes + 1)); x->bb = (float *)malloc(sizeof(float) * 4 * (g_nshapes + 1));
-	x->ix0 = (int *)malloc(sizeof(int) * (g_nshapes + 1)); x->iy0 = (int *)malloc(sizeof(int) * (g_nshapes + 1));
-	if (!x->it || !x->bb || !x->ix0 || !x->iy0) abort();
-	int live = 0;
-	for (int i = 0; i < g_nshapes; i++) { DxShape *s = g_allShapes[i]; if (!s->dead) g_allShapes[live++] = s; }
-	g_nshapes = live;
-	/* boxes in parallel (pose + trig per shape), then keep the finite ones in order */
-	{ struct bbjob j; j.bb = x->bb; dx_parallel_for(live, 2048, 8192, bb_range, &j); }
+	int ns = g_nshapes, nblk = (ns + IDX_BLOCK - 1) / IDX_BLOCK;
+	x->it = (DxShape **)malloc(sizeof(DxShape *) * (ns + 1)); x->bb = (float *)malloc(sizeof(float) * 4 * (ns + 1));
+	x->ix0 = (int *)malloc(sizeof(int) * (ns + 1)); x->iy0 = (int *)malloc(sizeof(int) * (ns + 1));
+	struct idxjob j; memset(&j, 0, sizeof j); j.x = x;
+	j.state = (unsigned char *)malloc((size_t)ns + 1); j.tmp = (float *)malloc(sizeof(float) * 4 * (ns + 1));
+	j.nlive = (int *)malloc(sizeof(int) * (nblk + 1)); j.nkeep = (int *)malloc(sizeof(int) * (nblk + 1)); j.mm = (float *)malloc(sizeof(float) * 4 * (nblk + 1));
+	if (!x->it || !x->bb || !x->ix0 || !x->iy0 || !j.state || !j.tmp || !j.nlive || !j.nkeep || !j.mm) abort();
+	g_allShapes2 = (DxShape **)grow(g_allShapes2, &g_capshapes2, ns + 1, sizeof(DxShape *));
+
+	/* boxes (pose + trig per shape), then the live shapes and the finite boxes compacted in order */
+	dx_parallel_for(ns, IDX_BLOCK, 2 * IDX_BLOCK, idx_boxes, &j);
 	float minx = INFINITY, miny = INFINITY, maxx = -INFINITY, maxy = -INFINITY;
-	for (int i = 0; i < live; i++)
+	int live = 0, n = 0;
+	for (int k = 0; k < nblk; k++)
 	{
-		DxShape *s = g_allShapes[i]; const float *src = &x->bb[4 * i];
-		if (!(isfinite(src[0]) && isfinite(src[1]) && isfinite(src[2]) && isfinite(src[3]))) continue;
-		float *bb = &x->bb[4 * n]; if (bb != src) memcpy(bb, src, 4 * sizeof(float));
-		memcpy(s->bb, bb, sizeof s->bb); s->pending = 0;
-		if (bb[0] < minx) minx = bb[0]; if (bb[1] < miny) miny = bb[1]; if (bb[2] > maxx) maxx = bb[2]; if (bb[3] > maxy) maxy = bb[3];
-		x->it[n++] = s;
+		int l = j.nlive[k], m = j.nkeep[k]; j.nlive[k] = live; j.nkeep[k] = n; live += l; n += m;
+		const float *mm = &j.mm[4 * k];
+		if (mm[0] < minx) minx = mm[0]; if (mm[1] < miny) miny = mm[1]; if (mm[2] > maxx) maxx = mm[2]; if (mm[3] > maxy) maxy = mm[3];
 	}
+	dx_parallel_for(ns, IDX_BLOCK, 2 * IDX_BLOCK, idx_place, &j);
+	{ DxShape **t = g_allShapes; int tc = g_capshapes; g_allShapes = g_allShapes2; g_capshapes = g_capshapes2; g_allShapes2 = t; g_capshapes2 = tc; }
+	g_nshapes = live;
+	free(j.state); free(j.tmp); free(j.nlive); free(j.nkeep); free(j.mm);
 	x->n = n;
 	if (!n) { x->gw = x->gh = 0; return x; }
+
 	float cell = 4.0f;
 	for (;;)
 	{
@@ -392,29 +539,17 @@ static DxIndex *index_build(void)
 	x->cell = cell; x->gx0 = (int)floorf(minx / cell); x->gy0 = (int)floorf(miny / cell);
 	x->gw = (int)floorf(maxx / cell) - x->gx0 + 1; x->gh = (int)floorf(maxy / cell) - x->gy0 + 1;
 	int cells = x->gw * x->gh;
-	x->cs = (int *)calloc((size_t)cells + 1, sizeof(int)); x->big = (int *)malloc(sizeof(int) * n); if (!x->cs || !x->big) abort();
-	long long total = 0;
-	for (int i = 0; i < n; i++)
-	{
-		float *bb = &x->bb[4 * i];
-		int x0 = (int)floorf(bb[0] / cell) - x->gx0, y0 = (int)floorf(bb[1] / cell) - x->gy0, x1 = (int)floorf(bb[2] / cell) - x->gx0, y1 = (int)floorf(bb[3] / cell) - x->gy0;
-		x->ix0[i] = x0; x->iy0[i] = y0;
-		long long span = (long long)(x1 - x0 + 1) * (y1 - y0 + 1);
-		if (span > 256) { x->big[x->nbig++] = i; x->ix0[i] = -1; continue; }
-		for (int gx = x0; gx <= x1; gx++) for (int gy = y0; gy <= y1; gy++) x->cs[gx * x->gh + gy + 1]++;
-		total += span;
-	}
+	x->cs = (int *)calloc((size_t)cells + 1, sizeof(int)); x->ix1 = (int *)malloc(sizeof(int) * n); x->iy1 = (int *)malloc(sizeof(int) * n);
+	if (!x->cs || !x->ix1 || !x->iy1) abort();
+	dx_parallel_for(n, 2048, 8192, idx_range, &j);
+	dx_parallel_for(IDX_PARTS, 1, n >= 8192 ? 2 : IDX_PARTS + 1, idx_count, &j);
 	for (int c = 0; c < cells; c++) x->cs[c + 1] += x->cs[c];
-	x->ci = (int *)malloc(sizeof(int) * (size_t)(total + 1)); if (!x->ci) abort();
-	int *fill = (int *)calloc((size_t)cells, sizeof(int)); if (!fill) abort();
-	for (int i = 0; i < n; i++)
-	{
-		if (x->ix0[i] < 0) continue;
-		float *bb = &x->bb[4 * i];
-		int x0 = x->ix0[i], y0 = x->iy0[i], x1 = (int)floorf(bb[2] / cell) - x->gx0, y1 = (int)floorf(bb[3] / cell) - x->gy0;
-		for (int gx = x0; gx <= x1; gx++) for (int gy = y0; gy <= y1; gy++) { int c = gx * x->gh + gy; x->ci[x->cs[c] + fill[c]++] = i; }
-	}
-	free(fill);
+	x->big = (int *)malloc(sizeof(int) * n); if (!x->big) abort();
+	for (int i = 0; i < n; i++) if (x->ix0[i] < 0) x->big[x->nbig++] = i;
+	x->ci = (int *)malloc(sizeof(int) * ((size_t)x->cs[cells] + 1)); j.fill = (int *)calloc((size_t)cells, sizeof(int));
+	if (!x->ci || !j.fill) abort();
+	dx_parallel_for(IDX_PARTS, 1, n >= 8192 ? 2 : IDX_PARTS + 1, idx_fill, &j);
+	free(j.fill);
 	return x;
 }
 typedef void (*dx_hit_fn)(DxShape *s, const float *bb, void *ctx);
@@ -442,15 +577,41 @@ static void index_query(const float *q, dx_hit_fn fn, void *ctx)
 		}
 		for (int k = 0; k < x->nbig; k++) { int i = x->big[k]; DxShape *s = x->it[i]; const float *bb = &x->bb[4 * i]; if (!s->dead && !s->pending && bb_hit(bb, q)) fn(s, bb, ctx); }
 	}
-	for (int k = 0; k < g_npending; k++) { DxShape *s = g_pending[k]; if (!s->dead && bb_hit(s->bb, q)) fn(s, s->bb, ctx); }
+	int np = (int)g_npending;   /* index_add publishes the count after the entry */
+	for (int k = 0; k < np; k++) { DxShape *s = g_pending[k]; if (!s->dead && bb_hit(s->bb, q)) fn(s, s->bb, ctx); }
 }
-/* New or reshaped shapes are visible to queries right away (Chipmunk indexes them on insertion). Caller holds g_world. */
+/* New or reshaped shapes are visible to queries right away (Chipmunk indexes them on insertion). Callers hold g_world. */
+/* Body creation breakdown (microseconds): 0 create total, 1 creates, 2 type change total, 3 type changes, 4 Rapier body
+   insert, 5 Rapier collider insert, 6 waiting for g_index in index_touch. DX_SetOption(330 + k), reset with 399. */
+static double g_life[8];
 static void index_touch(DxShape *s)
 {
+	double w0 = now_us();
 	AcquireSRWLockExclusive(&g_index);
+	g_life[6] += now_us() - w0;
 	float px, py, a; body_pose(s->body, &px, &py, &a); shape_bb(s, px, py, a, s->bb);
-	if (!s->pending) { APPEND(g_pending, g_npending, g_cappending, s); s->pending = 1; }
+	if (!s->pending) { int n = (int)g_npending; g_pending = (DxShape **)grow(g_pending, &g_cappending, n + 1, sizeof(DxShape *)); g_pending[n] = s; g_npending = n + 1; s->pending = 1; }
 	ReleaseSRWLockExclusive(&g_index);
+}
+/* A new shape is in no index yet, so it joins the pending list without g_index: queries hold g_index shared while they
+   call back into the game, and waiting for them here made a body creation take up to ~190 us with 70,000 bodies (game
+   logic queries run all the time). Writers are serialized by g_world; the entry and its box are written before the
+   count is published, and readers take the count once. Only growing the list (it moves) takes g_index. */
+static void index_add(DxShape *s)
+{
+	float px, py, a; body_pose(s->body, &px, &py, &a); shape_bb(s, px, py, a, s->bb);
+	s->pending = 1;
+	int n = (int)g_npending;
+	if (n + 1 > g_cappending)
+	{
+		double w0 = now_us();
+		AcquireSRWLockExclusive(&g_index);
+		g_life[6] += now_us() - w0;
+		g_pending = (DxShape **)grow(g_pending, &g_cappending, n + 1, sizeof(DxShape *));
+		ReleaseSRWLockExclusive(&g_index);
+	}
+	g_pending[n] = s;
+	InterlockedExchange(&g_npending, n + 1);
 }
 
 /* ---------- world bookkeeping (callers hold g_world) ---------- */
@@ -473,14 +634,16 @@ static DxShape *add_shape(DxBody *b, int kind, float w, float h, int sensor)
 {
 	struct R2ColliderDesc d = collider_desc(kind, w, h);
 	d.isSensor = (R2Bool)sensor;
+	double c0 = now_us();
 	struct R2ColliderHandle ch = r2InsertCollider(b->h, &d);
+	g_life[5] += now_us() - c0;
 	if (r2LastStatus() != R2_OK) return NULL;
 	DxShape *s = (DxShape *)calloc(1, sizeof(DxShape)); if (!s) abort();
 	s->h = ch; s->body = b; s->kind = kind; s->hw = w; s->hh = h; s->sensor = sensor;
 	s->next = b->shapes; b->shapes = s;
 	InterlockedOr(&b->dirty, D_FLAGS);
 	push_shape(s);
-	index_touch(s);
+	index_add(s);
 	return s;
 }
 static void apply_mass(DxBody *b)
@@ -489,18 +652,24 @@ static void apply_mass(DxBody *b)
 	mp.mass = b->mass > 0.0f ? b->mass : 1.0f; mp.principal_inertia = b->moment > 0.0f ? b->moment : mp.mass;
 	r2RigidBody_SetAdditionalMassProperties(b->h, mp, 1);
 }
+/* Soft CCD (experiment, DX_RAPIER_SOFTCCD=<distance>, default 0 = off): each body's broad-phase box grows along its
+   velocity by up to that distance, so contacts are found before bodies meet instead of in a separate sweep. */
+static float g_soft_ccd;
 static DxBody *new_body(float mass, float moment, float x, float y)
 {
 	struct R2RigidBodyDesc d = r2DynamicRigidBodyDesc();
 	d.position.translation.x = x; d.position.translation.y = y; d.position.rotation.angle = 0.0f;
 	d.canSleep = (R2Bool)g_sleep; d.linearDamping = g_damping; d.angularDamping = g_damping;
+	d.softCcdPrediction = g_ccd_split ? 0.0f : g_soft_ccd;
 	d.useAdditionalMassProperties = 1;
 	memset(&d.additionalMassProperties, 0, sizeof d.additionalMassProperties);
 	d.additionalMassProperties.mass = mass > 0.0f ? mass : 1.0f;
 	d.additionalMassProperties.principal_inertia = moment > 0.0f ? moment : d.additionalMassProperties.mass;
 	DxBody *b = (DxBody *)calloc(1, sizeof(DxBody)); if (!b) abort();
 	d.userData.low = (uint64_t)(uintptr_t)b;   /* bulk state reads of the active set map back to the record */
+	double i0 = now_us();
 	struct R2RigidBodyHandle h = r2InsertRigidBody(g_rw, &d);
+	g_life[4] += now_us() - i0;
 	if (r2LastStatus() != R2_OK) { free(b); return NULL; }
 	b->h = h; b->pos = b->rpos = pk(x, y); b->type = 2; b->mass = mass; b->moment = moment;
 	b->slot = g_nbodies; APPEND(g_bodies, g_nbodies, g_capbodies, b);
@@ -541,6 +710,51 @@ static void scale_softness(struct R2IntegrationParameters *ip)
 	ip->staticContactSoftness.natural_frequency = def.staticContactSoftness.natural_frequency * k;
 }
 
+/* Adaptive substeps. Fewer substeps let crowding bodies sink further into each other, and the contact pairs (and the
+   narrow phase) grow faster than the solver saves: in the game's final swarm (68,000 zombies) 10 substeps took 75 ms a
+   step with 377,000 pairs, 6 took 99 ms with 583,000, and 20 took 66 ms with 240,000. So the count follows the crowding:
+   contact pairs per awake body, smoothed, checked every ADAPT_PERIOD steps; above ADAPT_HI one substep more (two when 30% above), below
+   ADAPT_LO one less, within [DX_RAPIER_ADAPT_MIN, DX_RAPIER_ADAPT_MAX] (5-20). Under ADAPT_BODIES awake bodies the step
+   is cheap either way and the game's count stays. DX_RAPIER_ADAPT=0 or DX_RAPIER_ITERATIONS keeps a fixed count. */
+#define ADAPT_PERIOD 4
+#define ADAPT_BODIES 3000
+#define ADAPT_HI 3.0
+#define ADAPT_LO 2.2
+static int g_adapt, g_adapt_min, g_adapt_max, g_iters_game, g_iters, g_adapt_tick;
+static double g_adapt_density;
+static void set_iterations(int n)
+{
+	if (n == g_iters) return;
+	g_iters = n;
+	struct R2IntegrationParameters ip = r2IntegrationParameters(g_rw);
+	ip.numSolverIterations = (size_t)n; scale_softness(&ip); r2SetIntegrationParameters(g_rw, &ip);
+}
+static void adapt_iterations(double pairs, int awake)
+{
+	if (!g_adapt) return;
+	double d = awake > 0 ? pairs / awake : 0.0;
+	g_adapt_density = g_adapt_tick == 0 && g_adapt_density == 0.0 ? d : 0.7 * g_adapt_density + 0.3 * d;
+	if (++g_adapt_tick < ADAPT_PERIOD) return;
+	g_adapt_tick = 0;
+	int n = g_iters;
+	if (awake < ADAPT_BODIES) n = n < g_iters_game ? n + 1 : n > g_iters_game ? n - 1 : n;
+	else if (g_adapt_density > ADAPT_HI) n += g_adapt_density > 1.3 * ADAPT_HI ? 2 : 1;
+	else if (g_adapt_density < ADAPT_LO) n--;
+	if (n < g_adapt_min) n = g_adapt_min;
+	if (n > g_adapt_max) n = g_adapt_max;
+	set_iterations(n);
+}
+
+/* Pipeline counters on or off for the world (caller holds g_world). They cost a clock read per stage, so they are off
+   unless asked for. */
+static void apply_counters(void)
+{
+	if (g_counters_want < 0) g_counters_want = env_int("DX_RAPIER_COUNTERS", 0, 1, 0);
+	g_counters_on = 0;
+	if (!g_rw) return;
+	if (g_counters_want && g_step_counters) g_counters_on = r2SetCountersEnabled(g_rw, 1) == R2_OK;
+	if (!g_counters_on) r2SetCountersEnabled(g_rw, 0);
+}
 static void apply_threads(void)
 {
 	int n = g_threads;
@@ -569,13 +783,35 @@ DX_EXPORT void *Space_Create(float gravityX, float gravityY, int iterations)
 	g_rw = r2NewWorld();
 	if (!g_events) g_events = r2NewEventCollector(); else r2EventCollector_Clear(g_events);
 	g_sleep = env_int("DX_RAPIER_SLEEP", 0, 1, 1);
+	g_soft_ccd = env_float("DX_RAPIER_SOFTCCD", 0.0f, 100.0f, 0.0f);
+	g_ccd_split = env_int("DX_RAPIER_CCD_SPLIT", 0, 1, 0);
+	g_ccd_hardcat = (unsigned)env_int("DX_RAPIER_CCD_HARDCAT", 1, 0x7fffffff, 0x200000);
+	g_ccd_split_soft = env_float("DX_RAPIER_SOFTCCD", 0.0f, 100.0f, 1.0f);
 	struct R2Vector gr; gr.x = gravityX; gr.y = gravityY; r2SetGravity(g_rw, gr);
 	struct R2IntegrationParameters ip = r2IntegrationParameters(g_rw);
 	ip.dt = g_dt; ip.lengthUnit = 1.0f;
-	/* The game asks for Chipmunk iterations (10); DX_RAPIER_ITERATIONS overrides the count for Rapier's solver. */
-	iterations = env_int("DX_RAPIER_ITERATIONS", 1, 30, iterations);
-	ip.numSolverIterations = (size_t)(iterations > 0 ? iterations : 1);
+	/* The game asks for Chipmunk iterations (10). Rapier substeps start there and then follow the crowding (adapt_iterations);
+	   DX_RAPIER_ITERATIONS sets a fixed count instead. */
+	if (iterations < 1) iterations = 1;
+	int fixed = env_int("DX_RAPIER_ITERATIONS", 1, 30, 0);
+	g_adapt_min = env_int("DX_RAPIER_ADAPT_MIN", 1, 30, 5);
+	g_adapt_max = env_int("DX_RAPIER_ADAPT_MAX", g_adapt_min, 30, g_adapt_min > 20 ? g_adapt_min : 20);
+	g_adapt = !fixed && g_step_counters && env_int("DX_RAPIER_ADAPT", 0, 1, 1);
+	g_iters_game = iterations < g_adapt_min ? g_adapt_min : iterations > g_adapt_max ? g_adapt_max : iterations;
+	if (!g_adapt) g_iters_game = fixed ? fixed : iterations;
+	g_iters = g_iters_game; g_adapt_tick = 0; g_adapt_density = 0.0;
+	ip.numSolverIterations = (size_t)g_iters;
+	/* Rapier's PGS and stabilization sweeps inside each of those substeps (default 1 and 1) */
+	ip.numInternalPgsIterations = (size_t)env_int("DX_RAPIER_PGS", 1, 16, (int)ip.numInternalPgsIterations);
+	ip.numInternalStabilizationIterations = (size_t)env_int("DX_RAPIER_STAB", 0, 16, (int)ip.numInternalStabilizationIterations);
 	ip.normalizedAllowedLinearError = 0.1f;     /* Chipmunk collisionSlop 0.1 */
+	/* Contact parameters for experiments (https://rapier.rs/docs/user_guides/c/integration_parameters); unset keeps the
+	   value above or Rapier's default. */
+	ip.normalizedAllowedLinearError = env_float("DX_RAPIER_SLOP", 0.0f, 1.0f, ip.normalizedAllowedLinearError);
+	ip.normalizedPredictionDistance = env_float("DX_RAPIER_PREDICT", 0.0f, 2.0f, ip.normalizedPredictionDistance);
+	ip.normalizedContactRecycleDistance = env_float("DX_RAPIER_RECYCLE", 0.0f, 2.0f, ip.normalizedContactRecycleDistance);
+	ip.normalizedMaxCorrectiveVelocity = env_float("DX_RAPIER_MAXCORR", 0.0f, 100.0f, ip.normalizedMaxCorrectiveVelocity);
+	ip.warmstartCoefficient = env_float("DX_RAPIER_WARMSTART", 0.0f, 1.0f, ip.warmstartCoefficient);
 	/* The CCD pass sweeps fast bodies every step. DX_RAPIER_CCD=0 turns it off for the world (0 substeps): about 17%
 	   less r2Step with 60,000 crowding bodies, but in the dense test scenes 85-126 bodies get pushed through walls
 	   instead of 0-4, so it stays on by default. */
@@ -584,6 +820,7 @@ DX_EXPORT void *Space_Create(float gravityX, float gravityY, int iterations)
 	r2SetIntegrationParameters(g_rw, &ip);
 	g_damping = damping_for(g_dt);
 	apply_threads();
+	apply_counters();
 	ReleaseSRWLockExclusive(&g_world);
 	return g_space_token;
 }
@@ -592,6 +829,16 @@ static DxPair *g_newpairs; static int g_capnew;
 static DxPair *g_starts, *g_stops; static int g_capstarts, g_capstops;
 static DxBody **g_moving, **g_extra; static int g_capmoving, g_capawake, g_capextra;
 static unsigned g_stamp;
+static DxBodyWrite *g_writes; static int g_capwrites;
+/* One body's writes through the single-value calls, in the batch's order (pose, then velocities); with mass_of, its mass
+   change goes between the pose and the velocities. */
+static void write_body(const DxBodyWrite *w, DxBody *mass_of)
+{
+	if (w->flags & BW_POS) r2RigidBody_SetPosition(w->handle, w->position, (w->flags & BW_WAKE_POS) != 0);
+	if (mass_of) apply_mass(mass_of);
+	if (w->flags & BW_LINVEL) r2RigidBody_SetLinvel(w->handle, w->linvel, (w->flags & BW_WAKE_LINVEL) != 0);
+	if (w->flags & BW_ANGVEL) r2RigidBody_SetAngvel(w->handle, w->angvel, (w->flags & BW_WAKE_ANGVEL) != 0);
+}
 static struct R2RigidBodyHandle *g_qh; static int g_capqh;
 static struct R2RigidBodyHandle *g_mh; static int g_capmh;
 static struct R2RigidBodyState *g_ms; static int g_capms;
@@ -641,39 +888,41 @@ static void pull_range(void *ctx, int begin, int end, int worker)
 	}
 }
 
-DX_EXPORT void Space_Step(void *space, float timeStep)
+/* Push preparation in blocks of PUSH_BLOCK bodies. Each block's writes are compacted at the block's start in g_writes
+   (g_nwrite[block] of them); bodies with a flag sync or a mass change are listed at the block's start in g_special
+   (g_nspecial[block]). Bodies are distinct, so each record and each body's Rapier-side copy is touched by one worker;
+   Rapier itself is only called afterwards on the stepping thread. */
+#define PUSH_BLOCK 4096
+typedef struct { DxBody *b; DxBodyWrite w; } DxSpecial;
+static DxSpecial *g_special; static int g_capspecial;
+static int *g_nwrite, *g_nspecial; static int g_capblocks;
+/* A mass change goes between the pose and the velocities, as before: that body is written on its own, after its flag
+   sync. Everything else goes into the block's batch. */
+static void done(DxBody *b, const DxBodyWrite *w, int *nw, int *ns)
 {
-	DXD(1, space, timeStep, g_nbodies, 0, 0);
-	if (space != g_space_token || !g_rw || timeStep == 0.0f) return;
-	if (g_steps < 200 && (InterlockedIncrement(&g_steps) % 20) == 1) dx_check_patches("Space_Step");
-	dx_diag_thread();
-	AcquireSRWLockExclusive(&g_world);
-	if (timeStep != g_dt)
+	if (w->flags & (BW_SYNC | BW_MASS)) { DxSpecial *sp = &g_special[(*ns)++]; sp->b = b; sp->w = *w; }
+	if (!(w->flags & BW_MASS) && (w->flags & BW_RAPIER)) { g_writes[*nw] = *w; g_writes[(*nw)++].flags &= BW_RAPIER; }
+}
+static void prep_range(void *ctx, int begin, int end, int worker)
+{
+	(void)ctx; (void)worker;
+	int nw = begin, ns = begin;
+	for (int i = begin; i < end; i++)
 	{
-		g_dt = timeStep; g_damping = damping_for(g_dt);
-		struct R2IntegrationParameters ip = r2IntegrationParameters(g_rw); ip.dt = g_dt; scale_softness(&ip); r2SetIntegrationParameters(g_rw, &ip);
-		for (int i = 0; i < g_nbodies; i++) { r2RigidBody_SetLinearDamping(g_bodies[i]->h, g_damping); r2RigidBody_SetAngularDamping(g_bodies[i]->h, g_damping); }
-	}
-
-	double t0 = now_us();
-	/* push game-side state; values equal to what Rapier already holds are skipped so sleeping bodies stay asleep */
-	for (int i = 0; i < g_nbodies; i++)
-	{
-		DxBody *b = g_bodies[i];
+		DxBody *b = g_bodies[i]; DxBodyWrite ww, *w = &ww;
 		LONG d = b->dirty ? InterlockedExchange(&b->dirty, 0) : 0;   /* plain read first: most bodies are untouched */
-		if (d & D_FLAGS) sync_flags(b);
+		w->handle = b->h; w->flags = (d & D_FLAGS ? BW_SYNC : 0) | (d & D_MASS ? BW_MASS : 0);
 		if (d & (D_POS | D_ANGLE))
 		{
 			LONG64 np = (d & D_POS) ? b->pos : b->rpos; LONG na = (d & D_ANGLE) ? b->angle : b->rangle;
 			Pk p = upk(np);
 			if ((np != b->rpos || na != b->rangle) && isfinite(p.f.x) && isfinite(p.f.y) && isfinite(bitsf(na)))
 			{
-				struct R2Pose pose; pose.translation.x = p.f.x; pose.translation.y = p.f.y; pose.rotation.angle = bitsf(na);
-				r2RigidBody_SetPosition(b->h, pose, 1); b->rpos = np; b->rangle = na;
+				w->position.translation.x = p.f.x; w->position.translation.y = p.f.y; w->position.rotation.angle = bitsf(na);
+				w->flags |= BW_POS | BW_WAKE_POS; b->rpos = np; b->rangle = na;
 			}
 		}
-		if (d & D_MASS) apply_mass(b);
-		if (b->type == 1) continue;
+		if (b->type == 1) { done(b, w, &nw, &ns); continue; }
 		/* Chipmunk applies the force as v += f/m*dt and clears it every step: take it and fold it into the velocity we push. */
 		LONG64 force = 0; LONG torque = 0;
 		if (b->type == 2)
@@ -687,21 +936,84 @@ DX_EXPORT void Space_Step(void *space, float timeStep)
 			if (force && b->mass > 0.0f) { Pk p = upk(nv), f = upk(force); float k = g_dt / b->mass; nv = pk(p.f.x + f.f.x * k, p.f.y + f.f.y * k); }
 			/* Waking resets Rapier's sleep timer, so a (near) zero velocity is set without waking the body. */
 			Pk p = upk(nv);
-			if (nv != b->rvel && isfinite(p.f.x) && isfinite(p.f.y)) { struct R2Vector v; v.x = p.f.x; v.y = p.f.y; r2RigidBody_SetLinvel(b->h, v, v.x * v.x + v.y * v.y > DX_WAKE_SPEED * DX_WAKE_SPEED); b->rvel = nv; }
+			if (nv != b->rvel && isfinite(p.f.x) && isfinite(p.f.y))
+			{
+				w->linvel.x = p.f.x; w->linvel.y = p.f.y;
+				w->flags |= BW_LINVEL | (p.f.x * p.f.x + p.f.y * p.f.y > DX_WAKE_SPEED * DX_WAKE_SPEED ? BW_WAKE_LINVEL : 0); b->rvel = nv;
+			}
 		}
 		if ((d & D_ANGVEL) || torque)
 		{
-			LONG nw = b->angvel;
-			if (torque && b->moment > 0.0f) nw = fbits(bitsf(nw) + bitsf(torque) * (g_dt / b->moment));
-			if (nw != b->rangvel && isfinite(bitsf(nw))) { r2RigidBody_SetAngvel(b->h, bitsf(nw), fabsf(bitsf(nw)) > DX_WAKE_SPEED); b->rangvel = nw; }
+			LONG av = b->angvel;
+			if (torque && b->moment > 0.0f) av = fbits(bitsf(av) + bitsf(torque) * (g_dt / b->moment));
+			if (av != b->rangvel && isfinite(bitsf(av))) { w->angvel = bitsf(av); w->flags |= BW_ANGVEL | (fabsf(w->angvel) > DX_WAKE_SPEED ? BW_WAKE_ANGVEL : 0); b->rangvel = av; }
 		}
+		done(b, w, &nw, &ns);
 	}
+	g_nwrite[begin / PUSH_BLOCK] = nw - begin; g_nspecial[begin / PUSH_BLOCK] = ns - begin;
+}
+
+DX_EXPORT void Space_Step(void *space, float timeStep)
+{
+	DXD(1, space, timeStep, g_nbodies, 0, 0);
+	if (space != g_space_token || !g_rw || timeStep == 0.0f) return;
+	if (g_steps < 200 && (InterlockedIncrement(&g_steps) % 20) == 1) dx_check_patches("Space_Step");
+	dx_diag_thread();
+	AcquireSRWLockExclusive(&g_world);
+	if (timeStep != g_dt)
+	{
+		g_dt = timeStep; g_damping = damping_for(g_dt);
+		struct R2IntegrationParameters ip = r2IntegrationParameters(g_rw); ip.dt = g_dt; ip.numSolverIterations = (size_t)g_iters; scale_softness(&ip); r2SetIntegrationParameters(g_rw, &ip);
+		for (int i = 0; i < g_nbodies; i++) { r2RigidBody_SetLinearDamping(g_bodies[i]->h, g_damping); r2RigidBody_SetAngularDamping(g_bodies[i]->h, g_damping); }
+	}
+
+	double t0 = now_us();
+	/* push game-side state; values equal to what Rapier already holds are skipped so sleeping bodies stay asleep.
+	   The writes are prepared in parallel, then go to Rapier in one batch call per block (each call takes the world
+	   borrow and the error bookkeeping once: about 270 ns, and the game gives nearly every zombie a force every frame).
+	   Flag syncs and mass changes call Rapier directly first, in body order, on this thread. */
+	int nblk = (g_nbodies + PUSH_BLOCK - 1) / PUSH_BLOCK, nw = 0;
+	g_writes = (DxBodyWrite *)grow(g_writes, &g_capwrites, g_nbodies + 1, sizeof(DxBodyWrite));
+	g_special = (DxSpecial *)grow(g_special, &g_capspecial, g_nbodies + 1, sizeof(DxSpecial));
+	if (nblk + 1 > g_capblocks)
+	{
+		int cap = g_capblocks; g_nwrite = (int *)grow(g_nwrite, &cap, nblk + 1, sizeof(int));
+		cap = g_capblocks; g_nspecial = (int *)grow(g_nspecial, &cap, nblk + 1, sizeof(int)); g_capblocks = cap;
+	}
+	dx_parallel_for(g_nbodies, PUSH_BLOCK, 2 * PUSH_BLOCK, prep_range, NULL);
+	for (int k = 0; k < nblk; k++)
+		for (int m = 0; m < g_nspecial[k]; m++)
+		{
+			DxSpecial *sp = &g_special[k * PUSH_BLOCK + m];
+			if (sp->w.flags & BW_SYNC) sync_flags(sp->b);
+			if (sp->w.flags & BW_MASS) { sp->w.flags &= BW_RAPIER; write_body(&sp->w, sp->b); }
+		}
+	/* all or nothing per call: on an error nothing of that block was written, and its writes go through the single calls */
+	for (int k = 0; k < nblk; k++)
+	{
+		DxBodyWrite *bw = &g_writes[k * PUSH_BLOCK]; int n = g_nwrite[k];
+		if (n && (!g_write_states || g_write_states(g_rw, bw, (size_t)n) != R2_OK)) for (int m = 0; m < n; m++) write_body(&bw[m], NULL);
+		nw += n;
+	}
+	g_prof[7] += nw;
 
 	struct R2PhysicsHooks hooks; memset(&hooks, 0, sizeof hooks);
 	hooks.filter_contact_pair = hook_contact;
 	double t1 = now_us();
 	r2Step(g_rw, &hooks, g_events);
 	double t2 = now_us();
+	/* the contact pair count is kept with the counters off too */
+	double npairs = -1.0;
+	if (g_step_counters)
+	{
+		double v[DX_NCOUNTERS]; size_t nc = 0;
+		if (g_step_counters(g_rw, v, DX_NCOUNTERS, &nc) == R2_OK && nc > 17)
+		{
+			npairs = v[17];
+			if (g_counters_on) for (size_t k = 0; k < nc && k < DX_NCOUNTERS; k++) g_cnt[k] += v[k];
+		}
+	}
+	g_prof[8] += g_iters; if (npairs >= 0) g_prof[9] += npairs;
 
 	/* Bodies Rapier quarantined (non-finite pose or velocity) come back at their last valid pose, at rest. */
 	size_t nq; FETCH(nq, g_qh, g_capqh, r2QuarantinedRigidBodies(g_rw, g_qh, (size_t)g_capqh));
@@ -743,6 +1055,7 @@ DX_EXPORT void Space_Step(void *space, float timeStep)
 			for (int k = 0; k < m; k++) pull_body(g_extra[k], &g_ms[k]);
 	}
 	{ DxBody **t = g_awake; int tc = g_capawake; g_awake = g_moving; g_capawake = g_capmoving; g_nawake = nm; g_moving = t; g_capmoving = tc; }
+	if (npairs >= 0) adapt_iterations(npairs, (int)na);   /* the count for the next step */
 
 	double t3 = now_us();
 	/* collision events (on for type-1 colliders only) -> begin / separate of (1,0) pairs */
@@ -913,12 +1226,15 @@ DX_EXPORT float Space_GetAvailableSpace(void *space, float x1, float y1, float x
 }
 
 /* ---------- exports: bodies ---------- */
+/* Time spent in body creation and type changes (microseconds, calls), read with DX_SetOption(330-333), reset with 399. */
 DX_EXPORT DxBody *Body_Create(void *space, float mass, float x, float y, float radius)
 {
 	DXD(3, space, mass, x, y, radius);
 	if (!g_rw) return NULL;
+	double t0 = now_us();
 	AcquireSRWLockExclusive(&g_world);
 	DxBody *b = new_body(mass, mass * radius * radius * 0.5f, x, y);
+	g_life[0] += now_us() - t0; g_life[1] += 1;
 	ReleaseSRWLockExclusive(&g_world);
 	return b;
 }
@@ -926,9 +1242,11 @@ DX_EXPORT DxBody *Body_CreateCircle(void *space, float mass, float x, float y, f
 {
 	DXD(4, space, mass, x, y, radius);
 	if (!g_rw) return NULL;
+	double t0 = now_us();
 	AcquireSRWLockExclusive(&g_world);
 	DxBody *b = new_body(mass, mass * radius * radius * 0.5f, x, y);
 	if (b) { DxShape *s = add_shape(b, DX_CIRCLE, radius, radius, 0); if (s) s->ctype = 0; }
+	g_life[0] += now_us() - t0; g_life[1] += 1;
 	ReleaseSRWLockExclusive(&g_world);
 	return b;
 }
@@ -936,9 +1254,11 @@ DX_EXPORT DxBody *Body_CreateRectangle(void *space, float mass, float x, float y
 {
 	DXD(5, space, mass, x, width, height);
 	if (!g_rw) return NULL;
+	double t0 = now_us();
 	AcquireSRWLockExclusive(&g_world);
 	DxBody *b = new_body(mass, mass * (width * width + height * height) / 12.0f, x, y);
 	if (b) add_shape(b, DX_BOX, width * 0.5f, height * 0.5f, 0);
+	g_life[0] += now_us() - t0; g_life[1] += 1;
 	ReleaseSRWLockExclusive(&g_world);
 	return b;
 }
@@ -1053,6 +1373,7 @@ DX_EXPORT void Body_SetType(DxBody *body, unsigned char type)
 {
 	DXD(14, body, type, 0, 0, 0);
 	if (!body || body->dead) return;
+	double t0 = now_us();
 	AcquireSRWLockExclusive(&g_world);
 	if (!body->dead)
 	{
@@ -1068,6 +1389,7 @@ DX_EXPORT void Body_SetType(DxBody *body, unsigned char type)
 		}
 		if (type == 4 && s) { s->sensor = 1; r2Collider_SetSensor(s->h, 1); }
 	}
+	g_life[2] += now_us() - t0; g_life[3] += 1;
 	ReleaseSRWLockExclusive(&g_world);
 }
 DX_EXPORT unsigned char Body_GetType(DxBody *body)
@@ -1095,7 +1417,9 @@ DX_EXPORT int Body_Collides(DxBody *body1, DxBody *body2)
 
 DX_EXPORT void Space_Dispose(void *space) { (void)space; }
 
-/* 0: worker threads (-1 = auto), 200: engine id (2 = Rapier). Other Chipmunk switches do not apply. */
+/* 0: worker threads (-1 = auto), 200: engine id (2 = Rapier), 201-205: Rapier library (see below), 206-216: body record
+   layout, 300-309: step
+   sections, 310-329: Rapier stage counters, 399: reset them. Other Chipmunk switches do not apply. */
 DX_EXPORT int DX_SetOption(int name, int value)
 {
 	if (name == 0)
@@ -1106,11 +1430,36 @@ DX_EXPORT int DX_SetOption(int name, int value)
 		return g_threads;
 	}
 	if (name == 100) return 0;
-	if (name >= 300 && name < 308) return (int)g_prof[name - 300];
-	if (name == 399) { memset(g_prof, 0, sizeof g_prof); return 0; }
+	if (name >= 300 && name < 300 + DX_NPROF) return (int)g_prof[name - 300];
+	/* Rapier's own stage times (k < 17: microseconds) and counts (17 contact pairs, 18 constraints, 19 contacts), summed
+	   over the counted steps */
+	if (name >= 310 && name < 310 + DX_NCOUNTERS) { int k = name - 310; return (int)(k < 17 ? g_cnt[k] * 1000.0 : g_cnt[k]); }
+	if (name >= 330 && name < 337) return (int)g_life[name - 330];
+	if (name == 399) { memset(g_prof, 0, sizeof g_prof); memset(g_cnt, 0, sizeof g_cnt); memset(g_life, 0, sizeof g_life); return 0; }
+	if (name == 204)
+	{
+		load_rapier();
+		AcquireSRWLockExclusive(&g_world);
+		if (value >= 0) { g_counters_want = value != 0; apply_counters(); }
+		int on = g_rw ? g_counters_on : (g_counters_want > 0 && g_step_counters != NULL);
+		ReleaseSRWLockExclusive(&g_world);
+		return on;   /* 1: counting (the Rapier library has r2StepCounters and the profiler feature) */
+	}
 	if (name == 200) return 2;
-	if (name == 201 || name == 202) load_rapier();   /* asked before the first Space_Create */
-	if (name == 201) return g_rapier_avx2;   /* 1: the AVX2 build of the Rapier library is loaded */
+	if (name == 205) return g_adapt ? g_adapt_min * 100 + g_adapt_max : 0;   /* adaptive substeps: min*100+max, 0 fixed */
+	/* Body record layout for the mod's managed accessors (TABPerf PhysicsFast): the game's body handle is the DxBody
+	   pointer, and the simple getters/setters below only read or write these fields, so the mod can do the same without
+	   a native call. 206 = layout version (bump when a field or its meaning changes), 207 = sizeof, then offsets. */
+	if (name >= 206 && name <= 216)
+	{
+		static const int layout[] = { 1, (int)sizeof(DxBody), (int)offsetof(DxBody, pos), (int)offsetof(DxBody, vel),
+			(int)offsetof(DxBody, force), (int)offsetof(DxBody, angle), (int)offsetof(DxBody, dirty), (int)offsetof(DxBody, type),
+			(int)offsetof(DxBody, mass), (int)offsetof(DxBody, user), D_VEL };
+		return layout[name - 206];
+	}
+	if (name >= 201 && name <= 203) load_rapier();   /* asked before the first Space_Create */
+	if (name == 201) return g_rapier_simd;   /* loaded Rapier library build: 0 baseline, 1 AVX2, 2 AVX-512 */
 	if (name == 202) return g_rapier_release; /* 1: the Rapier library is a release (optimized) build */
+	if (name == 203) return g_write_states != NULL;   /* 1: body writes go in one batch call per step */
 	return -1;
 }

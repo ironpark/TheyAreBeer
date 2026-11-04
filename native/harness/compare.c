@@ -233,11 +233,15 @@ static int prof_main(const char *dllPath, int n, int steps, int kills)
 	Api A; if (!load(&A, dllPath, "계측")) return 2;
 	int (*get)(double *, int) = (int (*)(double *, int))GetProcAddress(A.h, "DX_ProfileGet");
 	void (*reset)(void) = (void (*)(void))GetProcAddress(A.h, "DX_ProfileReset");
-	if (!get || !reset) { fprintf(stderr, "DX_PROFILE 판이 아니다\n"); return 2; }
+	/* The Rapier DLL has no DX_ProfileGet: its step sections and Rapier's stage counters come from DX_SetOption. */
+	int (*opt)(int, int) = (int (*)(int, int))GetProcAddress(A.h, "DX_SetOption");
+	int rapier = (!get || !reset) && opt && opt(200, 0) == 2;
+	if ((!get || !reset) && !rapier) { fprintf(stderr, "DX_PROFILE 판이나 Rapier DLL이 아니다\n"); return 2; }
 	Trace t = {0}; g_tr = &t; g_rng = 777u;
 	const float dt = 0.0833333358f, C = 100.0f, H = 30.0f;
 	void *space = A.Space_Create(0.0f, 0.0f, 10);
 	A.Space_SetCollisionCallback(space, coll_cb); A.Space_SetSeparationCallback(space, sep_cb);
+	int counted = rapier && !(getenv("COMPARE_COUNTERS") && !strcmp(getenv("COMPARE_COUNTERS"), "0")) && opt(204, 1) == 1;   /* COMPARE_COUNTERS=0: off */
 	int nw = 0;
 	for (int i = 0; i <= 60; i++)
 		for (int side = 0; side < 4; side++)
@@ -257,7 +261,7 @@ static int prof_main(const char *dllPath, int n, int steps, int kills)
 	LARGE_INTEGER f, t0, t1; QueryPerformanceFrequency(&f); double wall = 0; int measured = 0;
 	for (int s = 0; s < steps; s++)
 	{
-		if (s == steps / 3) { reset(); wall = 0; measured = 0; t.n = 0; }
+		if (s == steps / 3) { if (rapier) opt(399, 0); else reset(); wall = 0; measured = 0; t.n = 0; }
 		QueryPerformanceCounter(&t0);
 		for (int i = 0; i < n; i++)
 		{
@@ -278,6 +282,17 @@ static int prof_main(const char *dllPath, int n, int steps, int kills)
 		A.Space_Step(space, dt);
 		QueryPerformanceCounter(&t1); wall += (double)(t1.QuadPart - t0.QuadPart) / f.QuadPart; measured++;
 		if (t.n > (1u << 20)) t.n = 0;
+	}
+	if (rapier)
+	{
+		int k = opt(305, 0); double d = k > 0 ? k : 1;
+		printf("기지 공성(Rapier): 좀비 %d, 단계당 죽음 %d, 잰 단계 %d — 단계 전체(시험 도구 포함) %.2f ms\n", n, kills, k, wall / (measured ? measured : 1) * 1000);
+		printf("  구간(ms/단계): 넣기 %.2f · r2Step %.2f · 가져오기 %.2f · 접촉 쌍 %.2f · 질의 인덱스 %.2f · 쓰기 %.0f/단계\n", opt(300, 0) / 1000.0 / d, opt(301, 0) / 1000.0 / d, opt(302, 0) / 1000.0 / d, opt(303, 0) / 1000.0 / d, opt(304, 0) / 1000.0 / d, opt(307, 0) / d);
+		if (!counted) { printf("  Rapier 단계 카운터 없음(r2StepCounters 없는 라이브러리)\n"); return 0; }
+		static const char *st[17] = { "Rapier 단계 전체", "사용자 변경 반영", "갱신", "충돌 검출", "  넓은 범위", "  넓은 범위(마무리)", "  좁은 범위", "섬 구성", "섬 제약 수집", "솔버", "  속도 조립", "    몸체", "    제약 초기화", "  속도 풀이", "  속도 갱신", "  결과 쓰기", "CCD" };
+		for (int i = 0; i < 17; i++) printf("  %-24s %8.2f ms\n", st[i], opt(310 + i, 0) / 1000.0 / d);
+		printf("  접촉 쌍 %.0f · 제약 %.0f · 접촉 %.0f (단계당)\n", opt(327, 0) / d, opt(328, 0) / d, opt(329, 0) / d);
+		return 0;
 	}
 	double p[32]; get(p, 32);
 	double st = p[29] > 0 ? p[29] : 1;

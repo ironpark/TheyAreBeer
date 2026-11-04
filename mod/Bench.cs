@@ -15,7 +15,7 @@ using ZX.GameSystems;
 namespace Billions
 {
     // Performance test mode, off unless engine.json has "bench": true (or TABPERF_BENCH=1). Every setting below can also be
-    // given as an environment variable, which wins over engine.json (scriptsench.ps1 uses them):
+    // given as an environment variable, which wins over engine.json (scripts\bench.ps1 uses them):
     //   bench TABPERF_BENCH · benchAuto TABPERF_BENCH_AUTO · benchSeconds TABPERF_BENCH_SECONDS · benchSwarmDelay TABPERF_BENCH_DELAY
     //   benchSwarmFactor TABPERF_BENCH_FACTOR · benchSeed TABPERF_BENCH_SEED · benchThreads TABPERF_BENCH_THREADS
     //   benchZoom TABPERF_BENCH_ZOOM ("max" | "off") · benchCsv TABPERF_BENCH_CSV (CSV path)
@@ -148,6 +148,7 @@ namespace Billions
             if (sec >= _autoDelay + _autoSeconds)
             {
                 Row("end");
+                PostProf.Dump();
                 if (PhysicsRedirect.Module != IntPtr.Zero)
                     Log.Info("bench: 게임 폴더 물리 DLL " + (PhysicsRedirect.GameDllLoaded() ? "도 올라와 있다(게임 시작 때 확인 호출 등)" : "은 올라오지 않았다 — 모든 물리 호출이 모드 쪽으로 갔다"));
                 Log.Info("bench: 자동 시험 끝 — 게임 종료");
@@ -230,12 +231,19 @@ namespace Billions
             Row("");
         }
 
-        static bool _header;
+        static bool _header; static long _iaLast, _cpuWall; static double _gtLast, _cpuLast;
         static void Row(string note)
         {
             try
             {
-                if (_engine == null) { _engine = PerfMod.PhysicsDll().Replace(',', ' '); Log.Info("bench: 물리 DLL — " + _engine); }
+                if (_engine == null)
+                {
+                    _engine = PerfMod.PhysicsDll().Replace(',', ' '); Log.Info("bench: 물리 DLL — " + _engine);
+                    // Rapier's stage counters cost about 7% of the step, so they are on only with DX_RAPIER_COUNTERS=1 (bench.ps1 -Counters)
+                    if (PerfMod.PhysOpt(200, 0) == 2) Log.Info("bench: Rapier 단계 카운터 " + (PerfMod.PhysOpt(204, -1) == 1 ? "켬" : "끔"));
+                    int adapt = PerfMod.PhysOpt(200, 0) == 2 ? PerfMod.PhysOpt(205, 0) : -1;
+                    if (adapt >= 0) Log.Info("bench: Rapier 하위 단계 " + (adapt > 0 ? "자동 " + adapt / 100 + "~" + adapt % 100 : "고정"));
+                }
                 int zombies = 0; foreach (var z in DXGame.Current.EntitiesOfType<Zombie>()) zombies++;
                 long steps = 0, st = 0, sm = 0, frames = 0, ft = 0, fm = 0;
                 bool tick = note.Length == 0;   // a marker row (note) leaves the running second alone
@@ -245,26 +253,87 @@ namespace Billions
                     frames = _frames; ft = _frameTicks; fm = _frameMax; _frames = 0; _frameTicks = 0; _frameMax = 0;
                 }
                 var c = CultureInfo.InvariantCulture;
-                // step sections (push, r2Step, pull, contact pairs, query index), ms per step this second: only the Rapier
+                // step sections (push, r2Step, pull, contact pairs, query index), ms per step this second, then solver substeps
+                // and narrow-phase contact pairs per step (DX_SetOption(308, 309)): only the Rapier
                 // DLL counts them (DX_SetOption(305) = steps counted; the other DLLs return -1 for unknown options)
-                string sections = ",,,,";
+                // then Rapier's own stage times and counts per step (DX_SetOption(310 + k), on with DX_SetOption(204, 1))
+                string sections = ",,,,,," + new string(',', Stages.Length);
+                // the game's own work around the step, ms per step: queued post methods, the per-body pre-step update
+                // (StartUpdatePhysics), and the per-body position read-back (OnNewPositionComputed)
+                // then the physics thread's waits, ms per step: for DXPhysicWorld.Sync (held by body creation on other
+                // threads) and for DXGame.SyncLogic (held through each game logic update); and the logic updates this second
+                // (the game wants 30) with the duration of the last one (IALogicUsageFactor = ms * 30 / 1000)
+                string game = ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,";
+                if (tick && steps > 0)
+                {
+                    double f = 1000.0 / Stopwatch.Frequency / steps;
+                    var g = DXGame.Current;
+                    long ia = g.IAIteration, dia = _iaLast > 0 ? ia - _iaLast : 0; _iaLast = ia;
+                    game = string.Join(",", (Interlocked.Exchange(ref PhysicsTime.PostMethodTicks, 0) * f).ToString("0.00", c),
+                        (Interlocked.Exchange(ref PhysicsTime.PreTicks, 0) * f).ToString("0.00", c), (Interlocked.Exchange(ref PhysicsTime.PostLoopTicks, 0) * f).ToString("0.00", c),
+                        (Interlocked.Exchange(ref PhysicsTime.SyncWaitTicks, 0) * f).ToString("0.00", c), (Interlocked.Exchange(ref PhysicsTime.PostTicks, 0) * f).ToString("0.00", c),
+                        dia.ToString(c), (g.IALogicUsageFactor * 1000.0 / 30.0).ToString("0.0", c));
+                    // Rapier body creations and type changes this second, with the native time per call (µs; DX_SetOption 330-333)
+                    int nc = PerfMod.PhysOpt(331, 0), nt = PerfMod.PhysOpt(333, 0);
+                    game += "," + (nc >= 0 ? nc.ToString(c) + "," + (nc > 0 ? (PerfMod.PhysOpt(330, 0) / (double)nc).ToString("0.0", c) : "") : ",")
+                        + "," + (nt >= 0 ? nt.ToString(c) + "," + (nt > 0 ? (PerfMod.PhysOpt(332, 0) / (double)nt).ToString("0.0", c) : "") : ",")
+                        // per creation: Rapier body insert, collider insert (µs); then the query-index lock wait this second (ms)
+                        + "," + (nc > 0 ? (PerfMod.PhysOpt(334, 0) / (double)nc).ToString("0.0", c) + "," + (PerfMod.PhysOpt(335, 0) / (double)nc).ToString("0.0", c) : ",")
+                        + "," + (nc >= 0 ? (PerfMod.PhysOpt(336, 0) / 1000.0).ToString("0.0", c) : "");
+                    // the game clock: the whole physics update (ms per step), game speed, the usage factors that slow the
+                    // clock when above 1 (physics: update ms * 12 * speed / 1000, logic: update ms * 30 * speed / 1000),
+                    // and game seconds per real second
+                    double gt = g.GameTime, rate = _gtLast > 0 ? (gt - _gtLast) / 1000.0 : 0; _gtLast = gt;
+                    game += "," + (Interlocked.Exchange(ref PhysicsTime.UpdateTicks, 0) * f).ToString("0.00", c) + "," + g.GameSpeed.ToString("0.00", c)
+                        + "," + g.PhysicsUsageFactor.ToString("0.00", c) + "," + g.IALogicUsageFactor.ToString("0.00", c) + "," + rate.ToString("0.00", c);
+                    // the logic rate (LogicProf), this second: UpdateGameLogic calls and their average wait for the previous
+                    // task (ms), logic tasks with average start delay and run time (ms), logic ticks run, tasks that ran no
+                    // tick, and the game clock loop's time held back by logic / by physics / let through (ms)
+                    double tf = 1000.0 / Stopwatch.Frequency;
+                    long calls = Interlocked.Exchange(ref LogicProf.Calls, 0), tasks = Interlocked.Exchange(ref LogicProf.Tasks, 0);
+                    double callMs = Interlocked.Exchange(ref LogicProf.CallTicks, 0) * tf, taskMs = Interlocked.Exchange(ref LogicProf.TaskTicks, 0) * tf, delayMs = Interlocked.Exchange(ref LogicProf.StartDelayTicks, 0) * tf;
+                    game += "," + calls.ToString(c) + "," + (calls > 0 ? callMs / calls : 0).ToString("0.00", c) + "," + tasks.ToString(c)
+                        + "," + (tasks > 0 ? delayMs / tasks : 0).ToString("0.00", c) + "," + (tasks > 0 ? taskMs / tasks : 0).ToString("0.00", c)
+                        + "," + Interlocked.Exchange(ref LogicProf.TicksRun, 0).ToString(c) + "," + Interlocked.Exchange(ref LogicProf.IdleTasks, 0).ToString(c)
+                        + "," + (Interlocked.Exchange(ref LogicProf.BlockIaUs, 0) / 1000.0).ToString("0", c) + "," + (Interlocked.Exchange(ref LogicProf.BlockPhysUs, 0) / 1000.0).ToString("0", c)
+                        + "," + (Interlocked.Exchange(ref LogicProf.RunUs, 0) / 1000.0).ToString("0", c);
+                    // the whole process's CPU time this second, in cores (all threads: game, render, logic, physics workers)
+                    long wall = Stopwatch.GetTimestamp(); double cpu;
+                    using (var pr = Process.GetCurrentProcess()) cpu = pr.TotalProcessorTime.TotalMilliseconds;
+                    double cores = _cpuWall > 0 ? (cpu - _cpuLast) / ((wall - _cpuWall) * 1000.0 / Stopwatch.Frequency) : 0;
+                    _cpuLast = cpu; _cpuWall = wall;
+                    game += "," + cores.ToString("0.00", c);
+                }
                 if (tick)
                 {
                     int n = PerfMod.PhysOpt(305, 0);
-                    if (n > 0) { var v = new string[5]; for (int k = 0; k < 5; k++) v[k] = (PerfMod.PhysOpt(300 + k, 0) / 1000.0 / n).ToString("0.00", c); sections = string.Join(",", v); }
+                    if (n > 0)
+                    {
+                        var v = new string[7 + Stages.Length];
+                        for (int k = 0; k < 5; k++) v[k] = (PerfMod.PhysOpt(300 + k, 0) / 1000.0 / n).ToString("0.00", c);
+                        v[5] = ((double)PerfMod.PhysOpt(308, 0) / n).ToString("0.0", c);
+                        v[6] = ((double)PerfMod.PhysOpt(309, 0) / n).ToString("0", c);
+                        bool counted = PerfMod.PhysOpt(204, -1) == 1;
+                        for (int k = 0; k < Stages.Length; k++)
+                            v[7 + k] = !counted ? "" : (PerfMod.PhysOpt(310 + Stages[k], 0) / (Stages[k] < 17 ? 1000.0 : 1.0) / n).ToString(Stages[k] < 17 ? "0.00" : "0", c);
+                        sections = string.Join(",", v);
+                    }
                     PerfMod.PhysOpt(399, 0);
                 }
                 string line = string.Join(",", DateTime.Now.ToString("HH:mm:ss", c), _engine, DXGame.Current.Paused ? "1" : "0",
                     frames.ToString(c), (frames > 0 ? Ms(ft) / frames : 0).ToString("0.00", c), Ms(fm).ToString("0.00", c),
                     steps.ToString(c), (steps > 0 ? Ms(st) / steps : 0).ToString("0.00", c), Ms(sm).ToString("0.00", c),
-                    zombies.ToString(c), note, sections);
+                    zombies.ToString(c), note, sections, game);
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(CsvPath)));
-                if (!_header && !File.Exists(CsvPath)) File.AppendAllText(CsvPath, "time,engine,paused,frames,frame_avg_ms,frame_max_ms,phys_steps,step_avg_ms,step_max_ms,zombies,note,r_push_ms,r_step_ms,r_pull_ms,r_pairs_ms,r_index_ms\r\n");
+                if (!_header && !File.Exists(CsvPath)) File.AppendAllText(CsvPath, "time,engine,paused,frames,frame_avg_ms,frame_max_ms,phys_steps,step_avg_ms,step_max_ms,zombies,note,r_push_ms,r_step_ms,r_pull_ms,r_pairs_ms,r_index_ms,r_substeps,r_contact_pairs," + StageHeader + ",g_postmethods_ms,g_pre_ms,g_post_ms,g_syncwait_ms,g_logicwait_ms,g_ia_per_s,g_ia_ms,n_create_per_s,n_create_us,n_settype_per_s,n_settype_us,n_insert_us,n_collider_us,n_indexwait_ms,g_update_ms,g_speed,g_phys_usage,g_ia_usage,g_clock_rate,l_calls,l_wait_ms,l_tasks,l_start_ms,l_task_ms,l_ticks,l_idle,l_block_ia_ms,l_block_phys_ms,l_run_ms,g_cpu_cores\r\n");
                 _header = true;
                 File.AppendAllText(CsvPath, line + "\r\n");
             }
             catch (Exception e) { Log.Error("bench row", e); }
         }
+        // Rapier stage counters in the CSV: DX_SetOption(310 + k) index, column name
+        static readonly int[] Stages = { 0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17, 19 };
+        const string StageHeader = "rs_total_ms,rs_user_ms,rs_update_ms,rs_bp_ms,rs_bp_final_ms,rs_np_ms,rs_island_ms,rs_collect_ms,rs_solver_ms,rs_vassembly_ms,rs_vsolve_ms,rs_vupdate_ms,rs_writeback_ms,rs_ccd_ms,rs_pairs,rs_contacts";
         static double Ms(long ticks) { return ticks * 1000.0 / Stopwatch.Frequency; }
     }
 }

@@ -79,6 +79,7 @@ namespace Billions
             Step("좀비 체력바 옵션", () => { LifeMarkers.Install(h); GameOptions.Install(h); });
             Step("프레임 훅", () => PerfHooks.Install(h));
             Step("성능 시험 모드", () => Bench.Install(h));
+            Step("로직 갱신 계측", () => LogicProf.Install(h));
             Log.Info("설치 끝 — 물리 DLL: " + PhysicsDll());
         }
 
@@ -96,7 +97,9 @@ namespace Billions
                 if (PhysicsRedirect.SetOption == null) return "원작(대체본 아님 — 모드 폴더에 chipmunk\\ 또는 rapier\\ 엔진을 넣으면 대량 좀비 물리가 빨라진다)";
                 if (PhysOpt(200, 0) != 2) return "다중 코어 대체본";
                 string s = "Rapier 대체본";
-                if (PhysOpt(201, 0) == 1) s += " (AVX2)";
+                int simd = PhysOpt(201, 0);
+                if (simd == 1) s += " (AVX2)"; else if (simd == 2) s += " (AVX-512)";
+                if (PhysOpt(203, 0) != 1) s += " — 몸체 값을 하나씩 넘김(일괄 쓰기 함수 없음)";
                 if (PhysOpt(202, 0) != 1) s += " — 경고: 디버그 빌드 Rapier 라이브러리라 매우 느리다(릴리스로 다시 빌드)";
                 return s;
             }

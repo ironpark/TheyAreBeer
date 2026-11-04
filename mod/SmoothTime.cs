@@ -44,7 +44,16 @@ namespace Billions
         static bool LoadPhysicsPre(DXGame __instance)
         {
             var g = __instance;
-            if (Installed != 1 || g == null || g.Configuration == null || !g.Configuration.HighPerformanceTiming) return true;
+            if (Installed != 1 || g == null || g.Configuration == null) return true;
+            // With the game option "FastTimming" (HighPerformanceTiming) off, the game runs LoadPhysicsOld: the physics thread
+            // itself adds 2 ms of game time per wait, and DXTimer.Wait drops the time a late wait missed, so the game clock
+            // stands still for the whole physics update. The game then runs at 83.3 / (83.3 + update ms) of its speed: 0.5x
+            // at 70,000 zombies (75 ms updates), 0.76x already at 20,000 (20 ms). This loop (the game's own fast-timing
+            // loop, with real elapsed time) is used either way; engine.json "fastTiming": false or TABPERF_FASTTIMING=0
+            // keeps the game's choice. The option itself is not changed.
+            bool hpt = g.Configuration.HighPerformanceTiming;
+            if (!hpt && !Settings.Bool(PhysicsTime.Config(), "fastTiming", "TABPERF_FASTTIMING", true)) return true;
+            if (!hpt) Log.Info("smooth time: 게임 옵션 FastTimming 이 꺼져 있지만 빠른 타이머 루프를 쓴다(engine.json fastTiming)");
             Task started = null; bool threadStarted = false;
             try
             {
@@ -115,7 +124,9 @@ namespace Billions
                         float f = acc ? (float)Math.Pow(1.02, dt / 4.0) : 1.02f;
                         if (num4 > num3) num3 = Math.Min(num4, num3 * f); else if (num4 < num3) num3 = Math.Max(num4, num3 / f);
                         double num5 = g.GameSpeed * num3;
-                        if (Math.Max((int)((g.GameTime - DXPhysicWorld.LastGameTimeUpdatePhysics) / 83.333333333333329), (int)((g.GameTime - DXGame.LastGameTimeIAUpdate) / 33.333332061767578)) <= 1)
+                        int physLag = (int)((g.GameTime - DXPhysicWorld.LastGameTimeUpdatePhysics) / 83.333333333333329), iaLag = (int)((g.GameTime - DXGame.LastGameTimeIAUpdate) / 33.333332061767578);
+                        LogicProf.Gate(dt, iaLag > 1, physLag > 1);
+                        if (Math.Max(physLag, iaLag) <= 1)
                             g.GameTime += num5 * dt;
                     }
                 }

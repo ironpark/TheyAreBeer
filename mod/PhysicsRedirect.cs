@@ -75,6 +75,10 @@ namespace Billions
 
             MethodInfo setOption;
             _map = Emit(imports, dll, GetProcAddress(mod, "DX_SetOption") != IntPtr.Zero, out setOption);
+            var opt = setOption != null ? (Func<int, int, int>)Delegate.CreateDelegate(typeof(Func<int, int, int>), setOption) : null;
+            // the simple body getters/setters of the Rapier replacement go to managed code (PhysicsFast)
+            int fast = PhysicsFast.Apply(_map, opt);
+            if (fast > 0) Log.Info("물리 연결: 몸체 값 읽기·쓰기 " + fast + "종은 DLL 호출 없이 몸체 기록을 직접 읽고 쓴다");
 
             // callers: every method of the game assembly whose IL calls one of the imports
             var targets = Callers(native.Assembly, imports);
@@ -92,7 +96,7 @@ namespace Billions
                 return false;
             }
             Module = mod;
-            if (setOption != null) SetOption = (Func<int, int, int>)Delegate.CreateDelegate(typeof(Func<int, int, int>), setOption);
+            SetOption = opt;
             if (GameDllLoaded()) Log.Info("물리 연결: 게임 폴더의 물리 DLL 이 이미 올라와 있다(모드가 실리기 전에 불렸다) — 그 뒤 호출만 모드 쪽으로 간다");
             var names = targets.ConvertAll(t => t.DeclaringType.Name + "." + t.Name);
             Log.Info("물리 연결: 게임의 물리 호출 " + imports.Count + "종을 " + dll + " 로 돌림 — 호출하는 메서드 " + targets.Count + "개 (" + sw.ElapsedMilliseconds + " ms): " + string.Join(", ", names.ToArray()));
@@ -139,6 +143,11 @@ namespace Billions
             var ab = AppDomain.CurrentDomain.DefineDynamicAssembly(new AssemblyName("TABPerf.PhysicsImports"), AssemblyBuilderAccess.Run);
             var tb = ab.DefineDynamicModule("TABPerf.PhysicsImports").DefineType("DXPhysicsImports", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
             const MethodAttributes attrs = MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig | MethodAttributes.PinvokeImpl;
+            // Without SuppressUnmanagedCodeSecurity every call also runs the runtime's unmanaged-code permission check
+            // (a stack walk); the game makes several calls per body per step. In the game's final swarm (70,000 zombies)
+            // the per-body work around the step went from 10.1 to 3.9 ms a step with it. TABPERF_SUCS=0 leaves it off.
+            if (Environment.GetEnvironmentVariable("TABPERF_SUCS") != "0")
+                tb.SetCustomAttribute(new CustomAttributeBuilder(typeof(System.Security.SuppressUnmanagedCodeSecurityAttribute).GetConstructor(Type.EmptyTypes), new object[0]));
             foreach (var m in imports)
             {
                 var pm = tb.DefinePInvokeMethod(m.M.Name, dll, m.Entry, attrs, CallingConventions.Standard, m.M.ReturnType, m.Types, m.A.CallingConvention, m.A.CharSet);

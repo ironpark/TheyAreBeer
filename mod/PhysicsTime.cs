@@ -25,7 +25,7 @@ namespace Billions
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern IntPtr GetCurrentThread();
         [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern bool GetThreadTimes(IntPtr h, out long c, out long e, out long k, out long u);
-        public static long StepWallTicks, StepCpu100ns, Steps, SepCalls, PreTicks, PostTicks; public static double PostMs;
+        public static long StepWallTicks, StepCpu100ns, Steps, SepCalls, PreTicks, PostTicks, PostLoopTicks, PostMethodTicks, SyncWaitTicks, UpdateTicks; public static double PostMs;   // PostTicks: wait for SyncLogic, SyncWaitTicks: wait for DXPhysicWorld.Sync
         static long Cpu() { long c, e, k, u; return GetThreadTimes(GetCurrentThread(), out c, out e, out k, out u) ? k + u : 0; }
         static void SepPre() { System.Threading.Interlocked.Increment(ref SepCalls); }
 
@@ -82,18 +82,21 @@ namespace Billions
             try
             {
                 if (!DXPhysicWorld.Initialized || !DXPhysicWorld.Enabled) return false;
+                long u0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 MethodInfo exec; var postMethods = PostMethods(out exec);
                 if (postMethods == null || exec == null) return true;
                 var bodies = DXPhysicWorld.Bodies;
+                long s0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 lock (DXPhysicWorld.Sync)
                 {
-                    var game = DXGame.Current;
+                    var game = DXGame.Current; SyncWaitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - s0;
                     game.OnStartPhysics();
                     try
                     {
                         long pm0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                        exec.Invoke(postMethods, null);
-                        PostMs = (System.Diagnostics.Stopwatch.GetTimestamp() - pm0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                        if (!PostProf.On || !PostProf.Run(postMethods)) exec.Invoke(postMethods, null);
+                        long pm1 = System.Diagnostics.Stopwatch.GetTimestamp(); PostMethodTicks += pm1 - pm0;
+                        PostMs = (pm1 - pm0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
                         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                         DXHelper_Task.For(0, bodies.Count, delegate (int a, int b)
                         {
@@ -118,6 +121,7 @@ namespace Billions
                     double span = t - DXPhysicWorld.TimeLastBodyPosition;
                     if (span <= 0 || span > 1000) span = 83.333333333333329;
                     DXPhysicWorld.FactorTimeForInterpolation = 1.0 / span;
+                    long p0 = System.Diagnostics.Stopwatch.GetTimestamp();
                     DXHelper_Task.For(0, bodies.Count, delegate (int a, int b)
                     {
                         for (int j = a; j < b; j++)
@@ -126,10 +130,12 @@ namespace Billions
                             if (bd.Handle != IntPtr.Zero && bd.GameEntity != null && bd.GameEntity.PhysicalType != DXBodyType.Static) bd.OnNewPositionComputed();
                         }
                     }, 200, 0);
+                    PostLoopTicks += System.Diagnostics.Stopwatch.GetTimestamp() - p0;
                     FarField.AfterStep();
                 }
                 DXPhysicWorld.NUpdates += 1U;
                 DXPhysicWorld.Iteration += 1U;
+                UpdateTicks += System.Diagnostics.Stopwatch.GetTimestamp() - u0;
             }
             catch (Exception e) { Log.Error("physics step", e); }
             return false;

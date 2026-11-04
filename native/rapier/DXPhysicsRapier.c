@@ -31,6 +31,7 @@
 #include <delayimp.h>
 #include <math.h>
 #include <stddef.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include "rapier.h"
@@ -105,13 +106,30 @@ typedef struct {
 	float cell; int gx0, gy0, gw, gh;
 	int *cs, *ci;             /* cell start (gw*gh+1), cell items */
 	int *big; int nbig;       /* items spanning too many cells */
+	unsigned *cat; LONG catgen;   /* category per item and g_catgen when they were read (valid while it is unchanged) */
 } DxIndex;
+static volatile LONG g_catgen;   /* bumped on every category change of an indexed shape */
 
 static struct R2World *g_rw;
 static struct R2EventCollector *g_events;
 static int g_sleep = 1;
 static void *g_space_token = &g_space_token;
 static SRWLOCK g_world = SRWLOCK_INIT, g_index = SRWLOCK_INIT;
+/* Call diagnostics, read with DX_SetOption(340 + k) (times in microseconds), reset with 399: 0/1 Body_SetAngle time/calls,
+   2/3 Body_SetSize, 4/5 Body_Dispose, 6/7 Body_AddSensor (the times include waiting for g_world, which a step holds),
+   8 pending entries at index rebuilds, 9 rebuilds, 10/11 ray walk check (DX_RAPIER_RAYWALK=2): first hits that differ
+   from the box walk at another distance / at the same distance, 12 category changes. Kept in nanoseconds. The timed
+   ones (0-7 and the per-kind query stats g_qs) cost clock reads on hot paths, so they run only while g_diag is on
+   (DX_SetOption(356, 1); the bench turns it on). */
+static int g_diag;
+static volatile LONG64 g_lk[13];
+static int g_ray_walk = 1;   /* DX_RAPIER_RAYWALK=0: the box walk (index_query); 2: both, mismatches counted (g_lk 10, 11) */
+typedef struct __declspec(align(64)) { volatile LONG64 v[6]; } DxQStat;   /* one cache line per query kind */
+static DxQStat g_qs[6];   /* see "exports: queries" */
+static __declspec(thread) double tl_cb;
+#define LK_ADD(k, v) InterlockedAdd64(&g_lk[k], (LONG64)(v))
+#define LK_T0() (g_diag ? now_us() : 0.0)
+#define LK_TIME(k, t0) do { if (g_diag && (t0) > 0.0) { LK_ADD((k), (now_us() - (t0)) * 1000.0); LK_ADD((k) + 1, 1); } } while (0)
 static DXCollisionCallback g_collision;
 static DXSeparationCallback g_separation;
 static DxBody **g_bodies; static int g_nbodies, g_capbodies;
@@ -420,7 +438,7 @@ static void sync_flags(DxBody *b)
 static void index_free(DxIndex *x)
 {
 	if (!x) return;
-	free(x->it); free(x->bb); free(x->ix0); free(x->iy0); free(x->ix1); free(x->iy1); free(x->cs); free(x->ci); free(x->big); free(x);
+	free(x->it); free(x->bb); free(x->ix0); free(x->iy0); free(x->ix1); free(x->iy1); free(x->cs); free(x->ci); free(x->big); free(x->cat); free(x);
 }
 /* The index is built in parallel passes over fixed blocks of shapes and items. The result is the same as one serial
    pass: live shapes keep their order, items are in shape order, and each cell lists its items in ascending order. */
@@ -474,6 +492,7 @@ static void idx_range(void *ctx, int begin, int end, int worker)
 		const float *bb = &x->bb[4 * i];
 		int x0 = cell_of(bb[0], cell, x->gx0), y0 = cell_of(bb[1], cell, x->gy0), x1 = cell_of(bb[2], cell, x->gx0), y1 = cell_of(bb[3], cell, x->gy0);
 		x->ix0[i] = x0; x->iy0[i] = y0; x->ix1[i] = x1; x->iy1[i] = y1;
+		x->cat[i] = (unsigned)x->it[i]->cat;
 		if ((long long)(x1 - x0 + 1) * (y1 - y0 + 1) > 256) x->ix0[i] = -1;
 	}
 }
@@ -540,7 +559,8 @@ static DxIndex *index_build(void)
 	x->gw = (int)floorf(maxx / cell) - x->gx0 + 1; x->gh = (int)floorf(maxy / cell) - x->gy0 + 1;
 	int cells = x->gw * x->gh;
 	x->cs = (int *)calloc((size_t)cells + 1, sizeof(int)); x->ix1 = (int *)malloc(sizeof(int) * n); x->iy1 = (int *)malloc(sizeof(int) * n);
-	if (!x->cs || !x->ix1 || !x->iy1) abort();
+	x->cat = (unsigned *)malloc(sizeof(unsigned) * n); x->catgen = g_catgen;   /* read before the categories */
+	if (!x->cs || !x->ix1 || !x->iy1 || !x->cat) abort();
 	dx_parallel_for(n, 2048, 8192, idx_range, &j);
 	dx_parallel_for(IDX_PARTS, 1, n >= 8192 ? 2 : IDX_PARTS + 1, idx_count, &j);
 	for (int c = 0; c < cells; c++) x->cs[c + 1] += x->cs[c];
@@ -554,9 +574,9 @@ static DxIndex *index_build(void)
 }
 typedef void (*dx_hit_fn)(DxShape *s, const float *bb, void *ctx);
 /* Calls fn once per live shape whose box overlaps q. Caller holds g_index shared. */
-static void index_query(const float *q, dx_hit_fn fn, void *ctx)
+static int index_query(const float *q, dx_hit_fn fn, void *ctx)
 {
-	DxIndex *x = g_idx;
+	DxIndex *x = g_idx; int cand = 0;
 	if (x && x->n)
 	{
 		float cell = x->cell;
@@ -565,20 +585,26 @@ static void index_query(const float *q, dx_hit_fn fn, void *ctx)
 		for (int gx = cx0; gx <= cx1; gx++) for (int gy = cy0; gy <= cy1; gy++)
 		{
 			int c = gx * x->gh + gy;
+			cand += x->cs[c + 1] - x->cs[c];
 			for (int k = x->cs[c]; k < x->cs[c + 1]; k++)
 			{
-				int i = x->ci[k]; DxShape *s = x->it[i];
+				int i = x->ci[k];
 				int fx = x->ix0[i] > cx0 ? x->ix0[i] : cx0, fy = x->iy0[i] > cy0 ? x->iy0[i] : cy0;
 				if (gx != fx || gy != fy) continue;
 				const float *bb = &x->bb[4 * i];
-				if (s->dead || s->pending || !bb_hit(bb, q)) continue;
+				if (!bb_hit(bb, q)) continue;   /* the boxes are one array; the shape record is a cache miss */
+				DxShape *s = x->it[i];
+				if (s->dead || s->pending) continue;
 				fn(s, bb, ctx);
 			}
 		}
+		cand += x->nbig;
 		for (int k = 0; k < x->nbig; k++) { int i = x->big[k]; DxShape *s = x->it[i]; const float *bb = &x->bb[4 * i]; if (!s->dead && !s->pending && bb_hit(bb, q)) fn(s, bb, ctx); }
 	}
 	int np = (int)g_npending;   /* index_add publishes the count after the entry */
+	cand += np;
 	for (int k = 0; k < np; k++) { DxShape *s = g_pending[k]; if (!s->dead && bb_hit(s->bb, q)) fn(s, s->bb, ctx); }
+	return cand;
 }
 /* New or reshaped shapes are visible to queries right away (Chipmunk indexes them on insertion). Callers hold g_world. */
 /* Body creation breakdown (microseconds): 0 create total, 1 creates, 2 type change total, 3 type changes, 4 Rapier body
@@ -784,6 +810,7 @@ DX_EXPORT void *Space_Create(float gravityX, float gravityY, int iterations)
 	if (!g_events) g_events = r2NewEventCollector(); else r2EventCollector_Clear(g_events);
 	g_sleep = env_int("DX_RAPIER_SLEEP", 0, 1, 1);
 	g_soft_ccd = env_float("DX_RAPIER_SOFTCCD", 0.0f, 100.0f, 0.0f);
+	g_ray_walk = env_int("DX_RAPIER_RAYWALK", 0, 2, 1);
 	g_ccd_split = env_int("DX_RAPIER_CCD_SPLIT", 0, 1, 0);
 	g_ccd_hardcat = (unsigned)env_int("DX_RAPIER_CCD_HARDCAT", 1, 0x7fffffff, 0x200000);
 	g_ccd_split_soft = env_float("DX_RAPIER_SOFTCCD", 0.0f, 100.0f, 1.0f);
@@ -1102,6 +1129,7 @@ DX_EXPORT void Space_Step(void *space, float timeStep)
 	/* rebuild the query index and free what the old one could still reference */
 	DxIndex *ni = index_build();
 	AcquireSRWLockExclusive(&g_index);
+	LK_ADD(8, g_npending); LK_ADD(9, 1);
 	DxIndex *old = g_idx; g_idx = ni; g_npending = 0;
 	for (int i = 0; i < g_ngrave; i++) free(g_grave[i]);
 	g_ngrave = 0;
@@ -1128,31 +1156,54 @@ DX_EXPORT void Space_Step(void *space, float timeStep)
 }
 
 /* ---------- exports: queries ---------- */
-struct qarea { DXEntityCallback func; };
-static void cb_area(DxShape *s, const float *bb, void *ctx) { (void)bb; ((struct qarea *)ctx)->func(s->body->user); }
-struct qmask { unsigned mask; dx_hit_fn fn; void *ctx; };
-static void cb_mask(DxShape *s, const float *bb, void *ctx) { struct qmask *m = (struct qmask *)ctx; if (query_pass(s, m->mask)) m->fn(s, bb, m->ctx); }
-static void query(float l, float b, float r, float t, unsigned mask, dx_hit_fn fn, void *ctx)
+/* Query diagnostics per kind (0 area, 1 radius, 2 radius fast, 3 nearest, 4 ray, 5 available space): calls, total ns,
+   ns waiting for g_index, ns in the game's callbacks, index entries looked at, hits passing the mask and box.
+   DX_SetOption(360 + kind * 6 + field) (times in microseconds), reset with 399. */
+typedef struct { int on; double t0, t1; } QT;
+static QT q_begin(void)
 {
-	float q[4] = { l, b, r, t }; struct qmask m; m.mask = mask; m.fn = fn; m.ctx = ctx;
-	AcquireSRWLockShared(&g_index); index_query(q, cb_mask, &m); ReleaseSRWLockShared(&g_index);
+	QT t; t.on = g_diag; t.t0 = t.t1 = 0.0;
+	if (t.on) { t.t0 = now_us(); tl_cb = 0.0; }
+	AcquireSRWLockShared(&g_index);
+	if (t.on) t.t1 = now_us();
+	return t;
+}
+static void q_end(int kind, QT t, int cand, int hits)
+{
+	ReleaseSRWLockShared(&g_index);
+	if (!t.on) return;
+	double t2 = now_us();
+	volatile LONG64 *q = g_qs[kind].v;
+	InterlockedAdd64(&q[0], 1); InterlockedAdd64(&q[1], (LONG64)((t2 - t.t0) * 1000.0)); InterlockedAdd64(&q[2], (LONG64)((t.t1 - t.t0) * 1000.0));
+	InterlockedAdd64(&q[3], (LONG64)(tl_cb * 1000.0)); InterlockedAdd64(&q[4], cand); InterlockedAdd64(&q[5], hits);
+}
+#define GAME_CB(call) do { if (g_diag) { double c0_ = now_us(); call; tl_cb += now_us() - c0_; } else call; } while (0)
+
+struct qarea { DXEntityCallback func; };
+static void cb_area(DxShape *s, const float *bb, void *ctx) { (void)bb; GAME_CB(((struct qarea *)ctx)->func(s->body->user)); }
+struct qmask { unsigned mask; dx_hit_fn fn; void *ctx; int hits; };
+static void cb_mask(DxShape *s, const float *bb, void *ctx) { struct qmask *m = (struct qmask *)ctx; if (query_pass(s, m->mask)) { m->hits++; m->fn(s, bb, m->ctx); } }
+static void query(int kind, float l, float b, float r, float t, unsigned mask, dx_hit_fn fn, void *ctx)
+{
+	float q[4] = { l, b, r, t }; struct qmask m; m.mask = mask; m.fn = fn; m.ctx = ctx; m.hits = 0;
+	QT qt = q_begin(); int cand = index_query(q, cb_mask, &m); q_end(kind, qt, cand, m.hits);
 }
 
 DX_EXPORT void Space_GetBodiesInArea(void *space, float x1, float y1, float x2, float y2, unsigned mask, DXEntityCallback func)
 {
-	(void)space; struct qarea a; a.func = func; query(x1, y1, x2, y2, mask, cb_area, &a);
+	(void)space; struct qarea a; a.func = func; query(0, x1, y1, x2, y2, mask, cb_area, &a);
 }
 struct qradius { float x, y, r2; DXEntityCallback func; };
 static void cb_radius(DxShape *s, const float *bb, void *ctx)
 {
 	(void)bb; struct qradius *d = (struct qradius *)ctx; Pk p = upk(s->body->pos);
 	float dy = d->y - p.f.y, dx = d->x - p.f.x; if (dy * dy + dx * dx > d->r2) return;
-	d->func(s->body->user);
+	GAME_CB(d->func(s->body->user));
 }
 DX_EXPORT void Space_GetBodiesInRadius(void *space, float x, float y, float radius, unsigned mask, DXEntityCallback func)
 {
 	(void)space; struct qradius d; d.x = x; d.y = y; d.r2 = radius * radius; d.func = func;
-	query(x - radius, y - radius, radius + x, radius + y, mask, cb_radius, &d);
+	query(1, x - radius, y - radius, radius + x, radius + y, mask, cb_radius, &d);
 }
 struct qfast { float x, y, r2, maxElements; void **elements; int count; };
 static void cb_fast(DxShape *s, const float *bb, void *ctx)
@@ -1164,7 +1215,7 @@ static void cb_fast(DxShape *s, const float *bb, void *ctx)
 DX_EXPORT int Space_GetBodiesInRadiusFast(void *space, float x, float y, float radius, unsigned mask, int maxElements, void **elements)
 {
 	(void)space; struct qfast d; d.x = x; d.y = y; d.r2 = radius * radius; d.maxElements = (float)maxElements; d.elements = elements; d.count = 0;
-	query(x - radius, y - radius, radius + x, radius + y, mask, cb_fast, &d);
+	query(2, x - radius, y - radius, radius + x, radius + y, mask, cb_fast, &d);
 	return d.count;
 }
 struct qnear { float best; DxShape *shape; float x, y; };
@@ -1178,8 +1229,9 @@ DX_EXPORT void *Space_GetNearestBody(void *space, float x, float y, float radius
 {
 	(void)space; struct qnear d; d.best = 9999999.0f; d.shape = NULL; d.x = x; d.y = y;
 	/* Same (asymmetric) box as the original wrapper. */
-	AcquireSRWLockShared(&g_index);
-	{ float q[4] = { x - radius, y - radius, (x + radius) + radius, (y + radius) + radius }; struct qmask m; m.mask = mask; m.fn = cb_near; m.ctx = &d; index_query(q, cb_mask, &m); }
+	QT qt = q_begin(); int cand;
+	float q[4] = { x - radius, y - radius, (x + radius) + radius, (y + radius) + radius }; struct qmask m; m.mask = mask; m.fn = cb_near; m.ctx = &d; m.hits = 0;
+	cand = index_query(q, cb_mask, &m);
 	void *res = NULL; DxShape *s = d.shape;
 	if (s)
 	{
@@ -1187,28 +1239,114 @@ DX_EXPORT void *Space_GetNearestBody(void *space, float x, float y, float radius
 		if (s->kind == DX_CIRCLE) { float rr = radius + s->hw; rr = rr * rr; res = d2 < rr ? s->user : NULL; }
 		else res = d2 < radius * radius ? s->user : NULL;
 	}
-	ReleaseSRWLockShared(&g_index);
+	q_end(3, qt, cand, m.hits);
 	return res;
 }
-struct qray { float ax, ay, bx, by, grow, best; DxShape *hit; int sensors; float acc; };
-static void cb_ray_first(DxShape *s, const float *bb, void *ctx)
+/* key: tie-break of the best hit (see index_ray_first); hits: candidates tested */
+struct qray { float ax, ay, bx, by, grow, best; DxShape *hit; long long key; int hits; float acc; };
+static void ray_start(struct qray *q) { q->best = 1.0f + 1e-6f; q->hit = NULL; q->key = 0; q->hits = 0; }
+/* The first-hit rule: non-sensors only, the earliest entry wins, an equal one only with a smaller key. */
+static void ray_take(struct qray *q, DxShape *s, long long key)
 {
-	(void)bb; struct qray *q = (struct qray *)ctx; float t;
-	if (s->sensor) return;
-	if (seg_hit(s, q->ax, q->ay, q->bx, q->by, q->grow, &t) && t < q->best) { q->best = t; q->hit = s; }
+	float t;
+	if (s->sensor || !seg_hit(s, q->ax, q->ay, q->bx, q->by, q->grow, &t)) return;
+	if (t < q->best || (t == q->best && q->hit && key < q->key)) { q->best = t; q->hit = s; q->key = key; }
 }
+/* the box walk: the first shape it meets keeps an equal distance */
+static void cb_ray_first(DxShape *s, const float *bb, void *ctx) { (void)bb; ray_take((struct qray *)ctx, s, LLONG_MAX); }
 static void segment_box(float x1, float y1, float x2, float y2, float r, float *q)
 {
 	q[0] = (x1 < x2 ? x1 : x2) - r; q[1] = (y1 < y2 ? y1 : y2) - r; q[2] = (x1 > x2 ? x1 : x2) + r; q[3] = (y1 > y2 ? y1 : y2) + r;
 }
+/* First hit along a segment: the same candidates as index_query over the segment's box (items whose box overlaps it,
+   mask passed), but only the grid cells near the segment are looked at, column by column from the start, and the walk
+   stops once the next column can only hold hits later than the best one. A long diagonal ray's box covers thousands of
+   zombies the ray never comes near (the game casts ~150,000 rays a second, 2,000-5,000 entries each with the box walk).
+   Why the cells suffice: a shape the grown segment touches at P(t) has a point Q of its box within m = grow + box border
+   of P(t), and the shape is listed in Q's cell. The walk visits every cell holding a point within m of the segment, and
+   once a column's near edge is more than m past P(best) in the walk direction, no Q of an earlier hit can lie in it.
+   An item spanning several walked cells is tested once per cell (the test has no side effect but the min).
+   Equal distances go to the shape the box walk meets first: grid items by (first cell of the item inside the box, item),
+   then the big list, then the pending list. Returns the index entries looked at. */
+static void ray_try(struct qray *q, DxShape *s, const float *bb, const float *qb, unsigned mask, long long key)
+{
+	if (!s->dead && bb_hit(bb, qb) && query_pass(s, mask)) { q->hits++; ray_take(q, s, key); }
+}
+static int index_ray_first(const float *qb, struct qray *q, unsigned mask)
+{
+	DxIndex *x = g_idx; int cand = 0;
+	if (x && x->n)
+	{
+		float cell = x->cell, m = q->grow + DX_BOX_RADIUS + 1e-3f;
+		float ax = q->ax, ay = q->ay, dx = q->bx - ax, dy = q->by - ay;
+		float lo = (ax < q->bx ? ax : q->bx) - m, hi = (ax > q->bx ? ax : q->bx) + m;
+		float blo = (ay < q->by ? ay : q->by) - m, bhi = (ay > q->by ? ay : q->by) + m;
+		int cx0 = cell_of(lo, cell, x->gx0), cx1 = cell_of(hi, cell, x->gx0), ry0 = cell_of(blo, cell, x->gy0), ry1 = cell_of(bhi, cell, x->gy0);
+		if (cx0 < 0) cx0 = 0; if (cx1 >= x->gw) cx1 = x->gw - 1; if (ry0 < 0) ry0 = 0; if (ry1 >= x->gh) ry1 = x->gh - 1;
+		int flat = fabsf(dx) < 1e-12f, step = dx >= 0.0f ? 1 : -1;
+		int catok = x->catgen == g_catgen;   /* no category changed since the build: filter by mask without the shape */
+		/* the box walk's clipped cell range, for its visiting order */
+		int bx0 = cell_of(qb[0], cell, x->gx0), by0 = cell_of(qb[1], cell, x->gy0);
+		if (bx0 < 0) bx0 = 0; if (by0 < 0) by0 = 0;
+		if (cx0 <= cx1 && ry0 <= ry1)
+			for (int gx = step > 0 ? cx0 : cx1; gx >= cx0 && gx <= cx1; gx += step)
+			{
+				float X0 = (float)(gx + x->gx0) * cell, X1 = X0 + cell;
+				if (q->hit && !flat && ((step > 0 ? X0 - m : X1 + m) - ax) / dx > q->best) break;
+				float ylo, yhi;
+				if (flat) { ylo = blo; yhi = bhi; }
+				else
+				{
+					float t0 = (X0 - m - ax) / dx, t1 = (X1 + m - ax) / dx;
+					if (t0 > t1) { float t = t0; t0 = t1; t1 = t; }
+					if (t0 < 0.0f) t0 = 0.0f; if (t1 > 1.0f) t1 = 1.0f;
+					if (t0 > t1) continue;
+					float y0 = ay + dy * t0, y1 = ay + dy * t1;
+					ylo = (y0 < y1 ? y0 : y1) - m; yhi = (y0 > y1 ? y0 : y1) + m;
+				}
+				int r0 = cell_of(ylo, cell, x->gy0), r1 = cell_of(yhi, cell, x->gy0);
+				if (r0 < ry0) r0 = ry0; if (r1 > ry1) r1 = ry1;
+				for (int gy = r0; gy <= r1; gy++)
+				{
+					int c = gx * x->gh + gy;
+					cand += x->cs[c + 1] - x->cs[c];
+					for (int k = x->cs[c]; k < x->cs[c + 1]; k++)
+					{
+						int i = x->ci[k];
+						if (catok && !(x->cat[i] & mask)) continue;
+						const float *bb = &x->bb[4 * i];
+						if (!bb_hit(bb, qb)) continue;
+						DxShape *s = x->it[i];
+						if (s->dead || s->pending || (!catok && !query_pass(s, mask))) continue;
+						int fx = x->ix0[i] > bx0 ? x->ix0[i] : bx0, fy = x->iy0[i] > by0 ? x->iy0[i] : by0;
+						q->hits++; ray_take(q, s, ((long long)(fx * x->gh + fy) << 32) | (unsigned)i);
+					}
+				}
+			}
+		cand += x->nbig;
+		for (int k = 0; k < x->nbig; k++) { int i = x->big[k]; DxShape *s = x->it[i]; if (!s->pending) ray_try(q, s, &x->bb[4 * i], qb, mask, (0x7FFFFFFELL << 32) | (unsigned)k); }
+	}
+	int np = (int)g_npending;
+	cand += np;
+	for (int k = 0; k < np; k++) { DxShape *s = g_pending[k]; ray_try(q, s, s->bb, qb, mask, (0x7FFFFFFFLL << 32) | (unsigned)k); }
+	return cand;
+}
 DX_EXPORT void *Space_RayCast(void *space, float x1, float y1, float x2, float y2, float radius, unsigned mask)
 {
-	(void)space; struct qray q; q.ax = x1; q.ay = y1; q.bx = x2; q.by = y2; q.grow = radius; q.best = 1.0f + 1e-6f; q.hit = NULL;
+	(void)space; struct qray q; q.ax = x1; q.ay = y1; q.bx = x2; q.by = y2; q.grow = radius; ray_start(&q);
 	float bb[4]; segment_box(x1, y1, x2, y2, radius, bb);
-	AcquireSRWLockShared(&g_index);
-	{ struct qmask m; m.mask = mask; m.fn = cb_ray_first; m.ctx = &q; index_query(bb, cb_mask, &m); }
+	QT qt = q_begin(); int cand = 0;
+	if (g_ray_walk) cand = index_ray_first(bb, &q, mask);
+	if (g_ray_walk != 1)
+	{
+		struct qray w = q; ray_start(&q);
+		struct qmask m; m.mask = mask; m.fn = cb_ray_first; m.ctx = &q; m.hits = 0;
+		int c = index_query(bb, cb_mask, &m);
+		if (!g_ray_walk) { cand = c; q.hits = m.hits; }
+		else if (w.hit != q.hit) LK_ADD(w.best != q.best ? 10 : 11, 1);   /* 10: another distance, 11: another shape at the same one */
+	}
 	void *res = q.hit ? q.hit->body->user : NULL;
-	ReleaseSRWLockShared(&g_index);
+	q_end(4, qt, cand, q.hits);
 	return res;
 }
 static void cb_ray_all(DxShape *s, const float *bb, void *ctx)
@@ -1220,7 +1358,7 @@ DX_EXPORT float Space_GetAvailableSpace(void *space, float x1, float y1, float x
 {
 	(void)space; struct qray q; q.ax = x1; q.ay = y1; q.bx = x2; q.by = y2; q.grow = radius; q.acc = 0.0f;
 	float bb[4]; segment_box(x1, y1, x2, y2, radius, bb);
-	query(bb[0], bb[1], bb[2], bb[3], mask, cb_ray_all, &q);
+	query(5, bb[0], bb[1], bb[2], bb[3], mask, cb_ray_all, &q);
 	float dy = y1 - y2, dx = x1 - x2;
 	return sqrtf(dy * dy + dx * dx) - q.acc;
 }
@@ -1266,6 +1404,7 @@ DX_EXPORT DxShape *Body_AddSensor(DxBody *body, int shapeType, float width, floa
 {
 	DXD(6, body, shapeType, width, height, categoryMask);
 	if (!body || body->dead || (shapeType != 1 && shapeType != 2)) return NULL;
+	double t0 = LK_T0();
 	AcquireSRWLockExclusive(&g_world);
 	DxShape *s = NULL;
 	if (!body->dead)
@@ -1274,12 +1413,14 @@ DX_EXPORT DxShape *Body_AddSensor(DxBody *body, int shapeType, float width, floa
 		if (s) { s->cat = (LONG)categoryMask; s->mask = (LONG)collisionMask; }
 	}
 	ReleaseSRWLockExclusive(&g_world);
+	LK_TIME(6, t0);
 	return s;
 }
 DX_EXPORT void Body_Dispose(DxBody *body)
 {
 	DXD(7, body, body ? body->dead : 0, g_nbodies, 0, 0);
 	if (!body || body->dead) return;
+	double t0 = LK_T0();
 	AcquireSRWLockExclusive(&g_world);
 	if (!body->dead)
 	{
@@ -1290,6 +1431,7 @@ DX_EXPORT void Body_Dispose(DxBody *body)
 		grave(body);
 	}
 	ReleaseSRWLockExclusive(&g_world);
+	LK_TIME(4, t0);
 }
 
 DX_EXPORT DxShape *Body_GetShape(DxBody *body) { return body ? body->shapes : NULL; }
@@ -1299,6 +1441,7 @@ DX_EXPORT void Body_SetSize(DxBody *body, float width, float height)
 {
 	DXD(8, body, width, height, 0, 0);
 	if (!body || body->dead) return;
+	double t0 = LK_T0();
 	AcquireSRWLockExclusive(&g_world);
 	DxShape *s = body->shapes;
 	if (s && !body->dead)
@@ -1311,6 +1454,7 @@ DX_EXPORT void Body_SetSize(DxBody *body, float width, float height)
 		index_touch(s);
 	}
 	ReleaseSRWLockExclusive(&g_world);
+	LK_TIME(2, t0);
 }
 DX_EXPORT DXPointF Body_GetSize(DxBody *body)
 {
@@ -1325,9 +1469,11 @@ DX_EXPORT void Body_SetAngle(DxBody *body, float angle)
 	if (!body) return;
 	body->angle = fbits(angle); InterlockedOr(&body->dirty, D_ANGLE);
 	if (body->dead) return;
+	double t0 = LK_T0();
 	AcquireSRWLockExclusive(&g_world);
 	if (!body->dead) for (DxShape *s = body->shapes; s; s = s->next) index_touch(s);   /* Chipmunk reindexes here */
 	ReleaseSRWLockExclusive(&g_world);
+	LK_TIME(0, t0);
 }
 DX_EXPORT float Body_GetAngle(DxBody *body) { return body ? bitsf(body->angle) : 0.0f; }
 DX_EXPORT void Body_SetPosition(DxBody *body, float x, float y) { DXD(10, body, x, y, 0, 0); if (!body) return; body->pos = pk(x, y); InterlockedOr(&body->dirty, D_POS); }
@@ -1404,7 +1550,12 @@ DX_EXPORT void Body_SetUserData(DxBody *body, void *data) { DXD(15, body, 0, 0, 
 DX_EXPORT unsigned Body_GetCategoryMask(DxBody *body) { return body && body->shapes ? (unsigned)body->shapes->cat : 0; }
 DX_EXPORT unsigned Body_GetCollisionMask(DxBody *body) { return body && body->shapes ? (unsigned)body->shapes->mask : 0; }
 DX_EXPORT void Body_SetCollisionMask(DxBody *body, unsigned mask) { if (body && body->shapes) { body->shapes->mask = (LONG)mask; InterlockedOr(&body->dirty, D_FLAGS); } }
-DX_EXPORT void Body_SetCategoryMask(DxBody *body, unsigned mask) { if (body && body->shapes) { body->shapes->cat = (LONG)mask; InterlockedOr(&body->dirty, D_FLAGS); } }
+DX_EXPORT void Body_SetCategoryMask(DxBody *body, unsigned mask)
+{
+	if (!body || !body->shapes) return;
+	if (body->shapes->cat != (LONG)mask) { InterlockedIncrement(&g_catgen); LK_ADD(12, 1); }
+	body->shapes->cat = (LONG)mask; InterlockedOr(&body->dirty, D_FLAGS);
+}
 DX_EXPORT unsigned Body_GetCategory(DxBody *body) { return Body_GetCategoryMask(body); }
 DX_EXPORT void Body_SetCategory(DxBody *body, unsigned category) { Body_SetCategoryMask(body, category); }
 
@@ -1435,7 +1586,10 @@ DX_EXPORT int DX_SetOption(int name, int value)
 	   over the counted steps */
 	if (name >= 310 && name < 310 + DX_NCOUNTERS) { int k = name - 310; return (int)(k < 17 ? g_cnt[k] * 1000.0 : g_cnt[k]); }
 	if (name >= 330 && name < 337) return (int)g_life[name - 330];
-	if (name == 399) { memset(g_prof, 0, sizeof g_prof); memset(g_cnt, 0, sizeof g_cnt); memset(g_life, 0, sizeof g_life); return 0; }
+	if (name >= 360 && name < 396) { int k = name - 360, f = k % 6; LONG64 v = g_qs[k / 6].v[f]; return (int)(f >= 1 && f <= 3 ? v / 1000 : v); }
+	if (name >= 340 && name < 353) { int k = name - 340; LONG64 v = g_lk[k]; return (int)(k < 8 && !(k & 1) ? v / 1000 : v); }
+	if (name == 356) { if (value >= 0) g_diag = value != 0; return g_diag; }   /* timed diagnostics on (1) / off (0) / ask (-1) */
+	if (name == 399) { memset(g_prof, 0, sizeof g_prof); memset(g_cnt, 0, sizeof g_cnt); memset(g_life, 0, sizeof g_life); for (int k = 0; k < 13; k++) InterlockedExchange64(&g_lk[k], 0); for (int k = 0; k < 36; k++) InterlockedExchange64(&g_qs[k / 6].v[k % 6], 0); return 0; }
 	if (name == 204)
 	{
 		load_rapier();

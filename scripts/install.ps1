@@ -20,10 +20,10 @@ if (Get-Process -Name 'TheyAreBillions' -ErrorAction SilentlyContinue) { throw '
 
 $out = Join-Path $repo 'native\out'
 $modOut = Join-Path $repo 'mod\out'
-# engine -> files (the first "need" ones are required; the AVX2 build is optional)
+# engine -> files (the first "need" ones are required; the AVX2 and AVX-512 builds are optional)
 $engines = [ordered]@{
   chipmunk = @{ files = @("$out\DXPhysicsNative.dll"); need = 1 }
-  rapier   = @{ files = @("$out\rapier\DXPhysicsNative.dll", "$out\rapier\rapier2d_ffi.dll", "$out\rapier\rapier2d_ffi_avx2.dll"); need = 2 }
+  rapier   = @{ files = @("$out\rapier\DXPhysicsNative.dll", "$out\rapier\rapier2d_ffi.dll", "$out\rapier\rapier2d_ffi_avx2.dll", "$out\rapier\rapier2d_ffi_avx512.dll"); need = 2 }
 }
 function Test-Built($e) { -not ($engines[$e].files[0..($engines[$e].need - 1)] | Where-Object { -not (Test-Path $_) }) }
 if (-not $Uninstall) {

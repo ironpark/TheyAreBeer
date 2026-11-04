@@ -4,7 +4,7 @@
 # Targets (built in this order; default all):
 #   chipmunk  native\out\DXPhysicsNative.dll          multi-core Chipmunk 7.0.0 physics (MSVC x64)
 #   harness   native\out\compare.exe                  runs the game's DLL and a replacement side by side and compares them
-#   rapier    native\out\rapier\DXPhysicsNative.dll   Rapier 2D physics, with rapier2d_ffi.dll and rapier2d_ffi_avx2.dll
+#   rapier    native\out\rapier\DXPhysicsNative.dll   Rapier 2D physics, with rapier2d_ffi.dll, rapier2d_ffi_avx2.dll and rapier2d_ffi_avx512.dll
 #             (needs CMake 3.25+, git and rustup; "all" skips it with a warning when they are missing)
 #   mod       mod\out\TABPerf.dll, ModInfos.json      the engine mod (Roslyn C#); needs the TABModLoader references in
 #             -RefDir (default <repo>\refs, filled by scripts\setup.ps1)
@@ -44,42 +44,72 @@ function Build-Harness {
   Write-Host "OK: $out\compare.exe  (usage: compare.exe <original DLL> <new DLL> [scene|all] [bodies] [steps])"
 }
 
-# ---------- rapier: DXPhysicsNative.dll + rapier2d_ffi.dll + rapier2d_ffi_avx2.dll ----------
+# ---------- rapier: DXPhysicsNative.dll + rapier2d_ffi.dll (+ _avx2, _avx512) ----------
 # rapier2d_ffi.dll is built the way the official guide says (https://rapier.rs/docs/user_guides/c/getting_started_c):
 #   cmake -S bindings/c -B build -DCMAKE_BUILD_TYPE=Release -DRAPIER_DIMENSION=2 -DRAPIER_ENABLE_PARALLEL=ON -DRAPIER_SIMD_LANES=8
 #   cmake --build build --config Release --parallel ; cmake --install build --prefix <sdk>
-# from dimforge/rapier pinned at $rapierRev. CMake's integration tests (ctest) then check the library.
+# from dimforge/rapier pinned at $rapierRev, with the patches in native\rapier applied (C bindings only):
+#   rapier-c-batch-write.patch    r2RigidBody_WriteStates: one world borrow for the whole push instead of one per body
+#                                 and value
+#   rapier-c-step-counters.patch  r2StepCounters: the pipeline's stage times of the last step (profiler feature;
+#                                 off until r2SetCountersEnabled)
+# The Rust side is built with fat LTO and one codegen unit. CMake's integration tests (ctest) then check the library.
 # DXPhysicsNative.dll is MSVC C only, so dx_text_pad still sits at the start of .text (TABModLoader patches base + 0x13B3);
-# it delay-loads rapier2d_ffi.dll (or the AVX2 build) from its own folder.
+# it delay-loads rapier2d_ffi.dll (or the AVX2 / AVX-512 build) from its own folder.
 $rapierRev = '475caa3ff4646fd9a796b67d14116256f4962bc7'   # Rapier C bindings 0.36.1+c.0
 $rapierToolchain = '1.99.1'                                 # bindings/c needs Rust 1.99
 # CMake options; RAPIER_DIM2 / RAPIER_F32 / RAPIER_PARALLEL on the C side must match them (the guide's consumer defines).
-$rapierOptions = [ordered]@{ 'RAPIER_DIMENSION:STRING' = '2'; 'RAPIER_PRECISION:STRING' = '32'; 'RAPIER_ENABLE_PARALLEL:BOOL' = 'ON'; 'RAPIER_SIMD_LANES:STRING' = '8' }
+$rapierOptions = [ordered]@{ 'RAPIER_DIMENSION:STRING' = '2'; 'RAPIER_PRECISION:STRING' = '32'; 'RAPIER_ENABLE_PARALLEL:BOOL' = 'ON'; 'RAPIER_SIMD_LANES:STRING' = '8'; 'RAPIER_FEATURES:STRING' = 'profiler' }
+# The same CMake build once per CPU level. DXPhysicsNative.dll picks the highest one the CPU and OS support (CPUID/XGETBV).
+# pf = IsProcessorFeaturePresent id that decides whether the tests can run here.
+#   rapier2d_ffi.dll         baseline x86-64 (SSE2): runs on any x64 CPU
+#   rapier2d_ffi_avx2.dll    AVX2 + FMA
+#   rapier2d_ffi_avx512.dll  AVX-512 (F, VL, BW, DQ, CD) instructions, same 8 lanes
+$rapierVariants = @(
+  @{ suffix = '';        rustflags = '';                                                                     pf = 0;  what = 'baseline x86-64' },
+  @{ suffix = '_avx2';   rustflags = ',+avx2,+fma';                                                          pf = 40; what = 'Rust +avx2,+fma' },
+  @{ suffix = '_avx512'; rustflags = ',+avx2,+fma,+avx512f,+avx512vl,+avx512bw,+avx512dq,+avx512cd'; pf = 41; what = 'Rust +avx2,+fma,+avx512f/vl/bw/dq/cd' }
+)
 
 function Test-RapierTools { -not ('git', 'cmake', 'rustup' | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }) }
+
+# The Rapier working tree is HEAD plus exactly these patches. A stamp file in .git holds their hashes; when the set or a
+# patch changes, the tree is reset to HEAD and all of them are applied again.
+function Set-RapierPatches([string]$dir, $patches) {
+  $want = ($patches | ForEach-Object { "$($_.Name) $((Get-FileHash $_.FullName -Algorithm SHA256).Hash)" }) -join "`n"
+  $stamp = Join-Path $dir '.git\tabperf-patches'
+  if ((Test-Path $stamp) -and (Get-Content $stamp -Raw) -eq $want) { return }
+  & git -C $dir checkout -q --force HEAD -- .; if ($LASTEXITCODE -ne 0) { throw 'reset Rapier source failed' }
+  & git -C $dir clean -q -fd; if ($LASTEXITCODE -ne 0) { throw 'clean Rapier source failed' }
+  foreach ($patch in $patches) { & git -C $dir apply $patch.FullName; if ($LASTEXITCODE -ne 0) { throw "git apply $($patch.Name) failed" } }
+  [IO.File]::WriteAllText($stamp, $want)
+}
 
 function Build-Rapier {
   $out = Join-Path $native 'out\rapier'; $obj = Join-Path $out 'obj'; New-Item -ItemType Directory -Force $out, $obj | Out-Null
   $srcDir = Join-Path $native 'out\rapier-src'
   function Check([string]$what) { if ($LASTEXITCODE -ne 0) { throw "$what failed" } }
 
-  # Rapier source at the pinned commit
+  # Rapier source at the pinned commit, with LF line endings as in the repository (the patches are LF)
   if (-not (Test-Path (Join-Path $srcDir '.git'))) { & git init -q $srcDir; Check 'git init'; & git -C $srcDir remote add origin https://github.com/dimforge/rapier.git; Check 'git remote' }
+  & git -C $srcDir config core.autocrlf false; Check 'git config'
   if ((& git -C $srcDir rev-parse -q --verify HEAD 2>$null) -ne $rapierRev) {
     & git -C $srcDir fetch -q --depth 1 origin $rapierRev; Check 'git fetch'
     & git -C $srcDir -c advice.detachedHead=false checkout -q --force FETCH_HEAD; Check 'git checkout'
   }
+  Set-RapierPatches $srcDir @(Get-ChildItem (Join-Path $native 'rapier') -Filter *.patch | Sort-Object Name)
   if (-not ((& rustup toolchain list) -match [regex]::Escape($rapierToolchain))) { & rustup toolchain install $rapierToolchain --profile minimal; Check "rustup install $rapierToolchain" }
   $env:RUSTUP_TOOLCHAIN = $rapierToolchain
+  # fat LTO across all crates, one codegen unit: Cargo's release profile through its environment variables
+  $env:CARGO_PROFILE_RELEASE_LTO = 'fat'; $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '1'
 
-  # The official CMake build of the C bindings, twice with the same options; only the Rust code generation differs:
-  #   rapier2d_ffi.dll       baseline x86-64 (SSE2): runs on any x64 CPU
-  #   rapier2d_ffi_avx2.dll  +avx2,+fma: the 8-lane solver runs on 256-bit registers; DXPhysicsNative.dll loads it only
-  #                          when CPUID/XGETBV report AVX2 + FMA with OS support.
   $defs = ($rapierOptions.Keys | ForEach-Object { '-D' + ($_ -replace ':.*$', '') + '=' + $rapierOptions[$_] }) -join ' '
-  function Build-Ffi([string]$name, [string]$rustflags, [bool]$test) {
+  Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int f);'
+  function Build-Ffi($v) {
+    $name = $v.suffix -replace '_', '-'
     $buildDir = Join-Path $native "out\rapier-build$name"; $sdk = Join-Path $native "out\rapier-sdk$name"
-    $env:RUSTFLAGS = "-C target-feature=+crt-static$rustflags"   # static C runtime, like the /MT C side
+    $test = $v.pf -eq 0 -or [W.K]::IsProcessorFeaturePresent($v.pf)
+    $env:RUSTFLAGS = "-C target-feature=+crt-static$($v.rustflags)"   # static C runtime, like the /MT C side
     # CMake runs inside the MSVC environment so the tests build with the same compiler as DXPhysicsNative.dll.
     $cfg = "-S `"$srcDir\bindings\c`" -B `"$buildDir`" -G `"NMake Makefiles`" -DCMAKE_BUILD_TYPE=Release $defs -DRAPIER_SHARED=ON -DRAPIER_BUILD_EXAMPLES=OFF"
     $steps = "`"$vcvars`" >nul && cmake $cfg && cmake --build `"$buildDir`" --config Release --parallel && cmake --install `"$buildDir`" --config Release --prefix `"$sdk`""
@@ -88,25 +118,22 @@ function Build-Rapier {
     Invoke-Cmd $steps $log "Rapier CMake build$name or tests" -Tail
     $cache = Get-Content (Join-Path $buildDir 'CMakeCache.txt')
     foreach ($k in $rapierOptions.Keys) { if (-not ($cache -contains "$k=$($rapierOptions[$k])")) { throw "CMake cache$name lacks $k=$($rapierOptions[$k])" } }
-    $tests = if ($test) { (Select-String -Path $log -Pattern 'tests passed' | Select-Object -Last 1).Line } else { 'tests skipped: this CPU has no AVX2' }
-    @{ sdk = $sdk; tests = $tests }
+    $tests = if ($test) { (Select-String -Path $log -Pattern 'tests passed' | Select-Object -Last 1).Line } else { 'tests skipped: this CPU lacks the instructions' }
+    @{ sdk = $sdk; tests = $tests; dll = (Join-Path $out "rapier2d_ffi$($v.suffix).dll"); what = $v.what }
   }
-  Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int f);'
-  $base = Build-Ffi '' '' $true
-  $avx2 = Build-Ffi '-avx2' ',+avx2,+fma' ([W.K]::IsProcessorFeaturePresent(40))   # PF_AVX2_INSTRUCTIONS_AVAILABLE: the AVX2 tests can run here
+  $built = @($rapierVariants | ForEach-Object { Build-Ffi $_ })
 
   # DXPhysicsNative.dll (MSVC C)
-  $dll = Join-Path $out 'DXPhysicsNative.dll'; $map = Join-Path $out 'DXPhysicsNative.map'; $rdll = Join-Path $out 'rapier2d_ffi.dll'; $rdll2 = Join-Path $out 'rapier2d_ffi_avx2.dll'
+  $dll = Join-Path $out 'DXPhysicsNative.dll'; $map = Join-Path $out 'DXPhysicsNative.map'
   Remove-Item $dll, $map -ErrorAction SilentlyContinue
-  Copy-Item (Join-Path $base.sdk 'bin\rapier2d_ffi.dll') $rdll -Force
-  Copy-Item (Join-Path $avx2.sdk 'bin\rapier2d_ffi.dll') $rdll2 -Force
-  $implib = Join-Path $base.sdk 'lib\rapier2d_ffi.dll.lib'; $include = Join-Path $base.sdk 'include'
+  foreach ($b in $built) { Copy-Item (Join-Path $b.sdk 'bin\rapier2d_ffi.dll') $b.dll -Force }
+  $implib = Join-Path $built[0].sdk 'lib\rapier2d_ffi.dll.lib'; $include = Join-Path $built[0].sdk 'include'
   $src = '"rapier\DXPhysicsRapier.c"', '"dxphysics\dxdiag.c"', '"dxphysics\dxpool.c"'
   $flags = '/nologo /utf-8 /O2 /MT /LD /W3 /DNDEBUG /DWIN32 /DRAPIER_DIM2 /DRAPIER_F32 /DRAPIER_PARALLEL /D_CRT_SECURE_NO_WARNINGS /wd4244 /wd4305 /d1trimfile:' + $native + '\'
   Invoke-Cmd "cd /d `"$native`" && `"$vcvars`" >nul && cl $flags /I`"$include`" /Idxphysics /Fo`"$obj\\`" /Fe`"$dll`" $($src -join ' ') /link /NOLOGO /MAP:`"$map`" `"$implib`" delayimp.lib /DELAYLOAD:rapier2d_ffi.dll" (Join-Path $out 'build.log') 'Rapier DXPhysicsNative.dll build'
   Write-Host ("OK: $dll  (dx_text_pad at RVA 0x{0:X})" -f (Assert-TextPad $dll $map))
-  Write-Host "OK: $rdll  (official CMake build: $(($rapierOptions.Keys | ForEach-Object { ($_ -replace ':.*$', '') + '=' + $rapierOptions[$_] }) -join ', '); $($base.tests))"
-  Write-Host "OK: $rdll2  (same, Rust +avx2,+fma; $($avx2.tests))"
+  $opts = ($rapierOptions.Keys | ForEach-Object { ($_ -replace ':.*$', '') + '=' + $rapierOptions[$_] }) -join ', '
+  foreach ($b in $built) { Write-Host "OK: $($b.dll)  (official CMake build: $opts, fat LTO; $($b.what); $($b.tests))" }
 }
 
 # ---------- mod: TABPerf.dll ----------

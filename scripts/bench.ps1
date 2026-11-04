@@ -1,6 +1,6 @@
 # Run the mod's automatic in-game benchmark for one or more physics engines and summarize the results.
 #   powershell -ExecutionPolicy Bypass -File scripts\bench.ps1 [-Engine chipmunk,rapier,original] [-Runs 1] [-Seconds 120]
-#     [-Factor 4] [-Delay 5] [-Seed 20261104] [-Threads -1] [-Zoom max|off] [-OutDir <folder>] [-GameDir <folder>]
+#     [-Factor 4] [-Delay 5] [-Seed 20261104] [-Threads -1] [-Zoom max|off] [-Counters] [-OutDir <folder>] [-GameDir <folder>]
 #
 # Each run starts the game with the TABPERF_* environment variables below (they win over engine.json), so engine.json is
 # left alone. The mod then starts a fixed survival game (seed -Seed), zooms out as far as the game allows (-Zoom max),
@@ -8,6 +8,8 @@
 # for -Seconds seconds, and quits the game.
 #   TABPERF_BENCH=1 TABPERF_BENCH_AUTO=1 TABPERF_ENGINE TABPERF_BENCH_SECONDS TABPERF_BENCH_DELAY TABPERF_BENCH_FACTOR
 #   TABPERF_BENCH_SEED TABPERF_BENCH_THREADS TABPERF_BENCH_ZOOM TABPERF_BENCH_CSV
+# -Counters also sets DX_RAPIER_COUNTERS=1: Rapier runs add its own stage times (rs_* columns); they cost about 7% of the
+# step, so leave them off when comparing step times.
 # Results: <OutDir>\<engine>-<run>.csv (one per run) and summary.csv; default OutDir bench-out\<date-time> in the repo.
 #
 # Needs the mod installed (scripts\install.ps1) and Steam running. The game normally restarts itself through Steam,
@@ -22,6 +24,7 @@ param(
   [int]$Seed = 20261104,
   [int]$Threads = -1,
   [ValidateSet('max', 'off')][string]$Zoom = 'max',
+  [switch]$Counters,
   [string]$OutDir = '',
   [string]$GameDir = ''
 )
@@ -51,7 +54,7 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 
 $vars = 'TABPERF_BENCH', 'TABPERF_BENCH_AUTO', 'TABPERF_ENGINE', 'TABPERF_BENCH_SECONDS', 'TABPERF_BENCH_DELAY', 'TABPERF_BENCH_FACTOR',
-        'TABPERF_BENCH_SEED', 'TABPERF_BENCH_THREADS', 'TABPERF_BENCH_ZOOM', 'TABPERF_BENCH_CSV'
+        'TABPERF_BENCH_SEED', 'TABPERF_BENCH_THREADS', 'TABPERF_BENCH_ZOOM', 'TABPERF_BENCH_CSV', 'DX_RAPIER_COUNTERS'
 # Loading the level takes a while: allow -Delay + -Seconds plus 5 minutes before giving up on a run.
 $timeout = $Delay + $Seconds + 300
 
@@ -62,7 +65,7 @@ function Summarize($csv, $engineName, $run) {
   $inv = [Globalization.CultureInfo]::InvariantCulture
   function Avg($set, $col) { $v = @($set | ForEach-Object { [double]::Parse($_.$col, $inv) }); if ($v.Count) { ($v | Measure-Object -Average).Average } else { 0 } }
   $last = @($rows | Select-Object -Last 30)   # the heaviest part: the crowd only grows (damage is off)
-  [pscustomobject]@{
+  $o = [ordered]@{
     engine = $engineName; run = $run; dll = $rows[0].engine; seconds = $rows.Count
     zombies_max = ($rows | ForEach-Object { [int]$_.zombies } | Measure-Object -Maximum).Maximum
     step_ms = [math]::Round((Avg $rows 'step_avg_ms'), 2); frame_ms = [math]::Round((Avg $rows 'frame_avg_ms'), 2)
@@ -70,6 +73,12 @@ function Summarize($csv, $engineName, $run) {
     last30_step_ms = [math]::Round((Avg $last 'step_avg_ms'), 2); last30_frame_ms = [math]::Round((Avg $last 'frame_avg_ms'), 2)
     last30_steps_per_s = [math]::Round((Avg $last 'phys_steps'), 1)
   }
+  # step sections (r_*, Rapier only), Rapier's own stage counters (rs_*) and the game's work around the step (g_*), last 30 s
+  foreach ($col in $rows[0].PSObject.Properties.Name | Where-Object { $_ -match '^(rs?|g|n|l)_' }) {
+    $set = @($last | Where-Object { $_.$col -ne '' })
+    if ($set.Count) { $o["last30_$col"] = [math]::Round((Avg $set $col), 2) }
+  }
+  [pscustomobject]$o
 }
 
 $createdAppId = $false
@@ -80,6 +89,7 @@ try {
   $env:TABPERF_BENCH = '1'; $env:TABPERF_BENCH_AUTO = '1'
   $env:TABPERF_BENCH_SECONDS = "$Seconds"; $env:TABPERF_BENCH_DELAY = "$Delay"; $env:TABPERF_BENCH_FACTOR = "$Factor"
   $env:TABPERF_BENCH_SEED = "$Seed"; $env:TABPERF_BENCH_THREADS = "$Threads"; $env:TABPERF_BENCH_ZOOM = $Zoom
+  if ($Counters) { $env:DX_RAPIER_COUNTERS = '1' }
   for ($r = 1; $r -le $Runs; $r++) {
     foreach ($e in $Engine) {
       $csv = Join-Path $OutDir "$e-$r.csv"
@@ -106,7 +116,8 @@ finally {
 
 if (-not $results.Count) { throw "No run produced results (see %APPDATA%\TABPerf\billions.log)" }
 $summary = Join-Path $OutDir 'summary.csv'
-$results | Export-Csv $summary -NoTypeInformation -Encoding UTF8
+$cols = @($results | ForEach-Object { $_.PSObject.Properties.Name } | Select-Object -Unique)   # Rapier runs add columns
+$results | Select-Object $cols | Export-Csv $summary -NoTypeInformation -Encoding UTF8
 ''
 $results | Format-Table engine, run, zombies_max, step_ms, frame_ms, last30_zombies, last30_step_ms, last30_frame_ms, last30_steps_per_s -AutoSize | Out-String | Write-Host
 Write-Host "Results: $OutDir (summary.csv, <engine>-<run>.csv)"

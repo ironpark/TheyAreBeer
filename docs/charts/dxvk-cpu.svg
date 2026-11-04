@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="DXVK: 프로세스 CPU 사용량">
+<style>svg{font-family:system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif}.bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.tm{fill:#898781}.grid{stroke:#e1e0d9}.axis{stroke:#c3c2b7}.ring{stroke:#fcfcfb}.ref{stroke:#898781}.s-d3d9{stroke:#898781}.f-d3d9{fill:#898781}.s-dxvk{stroke:#2a78d6}.f-dxvk{fill:#2a78d6}@media (prefers-color-scheme: dark){.bg{fill:#1a1a19}.t1{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.axis{stroke:#383835}.ring{stroke:#1a1a19}.s-d3d9{stroke:#898781}.f-d3d9{fill:#898781}.s-dxvk{stroke:#3987e5}.f-dxvk{fill:#3987e5}}</style>
+<rect class="bg" width="1000" height="360" rx="8"/>
+<text class="t1" x="64" y="26" font-size="16" font-weight="600">DXVK: 프로세스 CPU 사용량</text>
+<text class="t2" x="64" y="46" font-size="12">논리 코어 수 기준, Direct3D 9 2회 · DXVK 3회 평균. 좀비가 적을 때는 DXVK가 프레임을 더 많이 그려 CPU를 더 쓴다</text>
+<line class="grid" x1="64" x2="850" y1="308.0" y2="308.0" stroke-width="1"/>
+<text class="tm" x="56" y="312.0" font-size="11" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="850" y1="252.0" y2="252.0" stroke-width="1"/>
+<text class="tm" x="56" y="256.0" font-size="11" text-anchor="end">6</text>
+<line class="grid" x1="64" x2="850" y1="196.0" y2="196.0" stroke-width="1"/>
+<text class="tm" x="56" y="200.0" font-size="11" text-anchor="end">12</text>
+<line class="grid" x1="64" x2="850" y1="140.0" y2="140.0" stroke-width="1"/>
+<text class="tm" x="56" y="144.0" font-size="11" text-anchor="end">18</text>
+<line class="grid" x1="64" x2="850" y1="84.0" y2="84.0" stroke-width="1"/>
+<text class="tm" x="56" y="88.0" font-size="11" text-anchor="end">24</text>
+<line class="axis" x1="64" x2="850" y1="308" y2="308" stroke-width="1"/>
+<text class="tm" x="64.0" y="326" font-size="11" text-anchor="middle">0만</text>
+<text class="tm" x="213.7" y="326" font-size="11" text-anchor="middle">2만</text>
+<text class="tm" x="363.4" y="326" font-size="11" text-anchor="middle">4만</text>
+<text class="tm" x="513.1" y="326" font-size="11" text-anchor="middle">6만</text>
+<text class="tm" x="662.9" y="326" font-size="11" text-anchor="middle">8만</text>
+<text class="tm" x="812.6" y="326" font-size="11" text-anchor="middle">10만</text>
+<text class="tm" x="457.0" y="350" font-size="11" text-anchor="middle">좀비 수</text>
+<text class="tm" x="12" y="70" font-size="11" text-anchor="start">코어</text>
+<path class="s-d3d9" d="M195.0,277.1 L232.4,267.8 L269.9,256.0 L307.3,224.6 L344.7,199.1 L382.1,181.5 L419.6,173.2 L457.0,166.6 L494.4,144.4 L531.9,143.4 L569.3,138.6 L606.7,125.4 L644.1,122.3 L681.6,116.5 L719.0,122.0 L756.4,118.8 L793.9,116.9 L831.3,126.1" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="195.0" cy="277.1" r="10" fill="transparent"><title>Direct3D 9 · 좀비 15~20천 (6초): 3.3코어</title></circle>
+<circle cx="232.4" cy="267.8" r="10" fill="transparent"><title>Direct3D 9 · 좀비 20~25천 (9초): 4.3코어</title></circle>
+<circle cx="269.9" cy="256.0" r="10" fill="transparent"><title>Direct3D 9 · 좀비 25~30천 (9초): 5.6코어</title></circle>
+<circle cx="307.3" cy="224.6" r="10" fill="transparent"><title>Direct3D 9 · 좀비 30~35천 (10초): 8.9코어</title></circle>
+<circle cx="344.7" cy="199.1" r="10" fill="transparent"><title>Direct3D 9 · 좀비 35~40천 (11초): 11.7코어</title></circle>
+<circle cx="382.1" cy="181.5" r="10" fill="transparent"><title>Direct3D 9 · 좀비 40~45천 (11초): 13.6코어</title></circle>
+<circle cx="419.6" cy="173.2" r="10" fill="transparent"><title>Direct3D 9 · 좀비 45~50천 (13초): 14.4코어</title></circle>
+<circle cx="457.0" cy="166.6" r="10" fill="transparent"><title>Direct3D 9 · 좀비 50~55천 (13초): 15.1코어</title></circle>
+<circle cx="494.4" cy="144.4" r="10" fill="transparent"><title>Direct3D 9 · 좀비 55~60천 (12초): 17.5코어</title></circle>
+<circle cx="531.9" cy="143.4" r="10" fill="transparent"><title>Direct3D 9 · 좀비 60~65천 (12초): 17.6코어</title></circle>
+<circle cx="569.3" cy="138.6" r="10" fill="transparent"><title>Direct3D 9 · 좀비 65~70천 (14초): 18.1코어</title></circle>
+<circle cx="606.7" cy="125.4" r="10" fill="transparent"><title>Direct3D 9 · 좀비 70~75천 (16초): 19.6코어</title></circle>
+<circle cx="644.1" cy="122.3" r="10" fill="transparent"><title>Direct3D 9 · 좀비 75~80천 (16초): 19.9코어</title></circle>
+<circle cx="681.6" cy="116.5" r="10" fill="transparent"><title>Direct3D 9 · 좀비 80~85천 (17초): 20.5코어</title></circle>
+<circle cx="719.0" cy="122.0" r="10" fill="transparent"><title>Direct3D 9 · 좀비 85~90천 (21초): 19.9코어</title></circle>
+<circle cx="756.4" cy="118.8" r="10" fill="transparent"><title>Direct3D 9 · 좀비 90~95천 (22초): 20.3코어</title></circle>
+<circle cx="793.9" cy="116.9" r="10" fill="transparent"><title>Direct3D 9 · 좀비 95~100천 (23초): 20.5코어</title></circle>
+<circle cx="831.3" cy="126.1" r="10" fill="transparent"><title>Direct3D 9 · 좀비 100~105천 (225초): 19.5코어</title></circle>
+<path class="s-dxvk" d="M195.0,248.5 L232.4,231.6 L269.9,211.1 L307.3,204.5 L344.7,202.8 L382.1,182.0 L419.6,178.8 L457.0,164.9 L494.4,151.1 L531.9,146.5 L569.3,135.2 L606.7,127.9 L644.1,128.8 L681.6,121.0 L719.0,124.7 L756.4,123.8 L793.9,116.2 L831.3,128.4" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="195.0" cy="248.5" r="10" fill="transparent"><title>DXVK · 좀비 15~20천 (9초): 6.4코어</title></circle>
+<circle cx="232.4" cy="231.6" r="10" fill="transparent"><title>DXVK · 좀비 20~25천 (12초): 8.2코어</title></circle>
+<circle cx="269.9" cy="211.1" r="10" fill="transparent"><title>DXVK · 좀비 25~30천 (14초): 10.4코어</title></circle>
+<circle cx="307.3" cy="204.5" r="10" fill="transparent"><title>DXVK · 좀비 30~35천 (16초): 11.1코어</title></circle>
+<circle cx="344.7" cy="202.8" r="10" fill="transparent"><title>DXVK · 좀비 35~40천 (17초): 11.3코어</title></circle>
+<circle cx="382.1" cy="182.0" r="10" fill="transparent"><title>DXVK · 좀비 40~45천 (16초): 13.5코어</title></circle>
+<circle cx="419.6" cy="178.8" r="10" fill="transparent"><title>DXVK · 좀비 45~50천 (19초): 13.8코어</title></circle>
+<circle cx="457.0" cy="164.9" r="10" fill="transparent"><title>DXVK · 좀비 50~55천 (19초): 15.3코어</title></circle>
+<circle cx="494.4" cy="151.1" r="10" fill="transparent"><title>DXVK · 좀비 55~60천 (18초): 16.8코어</title></circle>
+<circle cx="531.9" cy="146.5" r="10" fill="transparent"><title>DXVK · 좀비 60~65천 (19초): 17.3코어</title></circle>
+<circle cx="569.3" cy="135.2" r="10" fill="transparent"><title>DXVK · 좀비 65~70천 (21초): 18.5코어</title></circle>
+<circle cx="606.7" cy="127.9" r="10" fill="transparent"><title>DXVK · 좀비 70~75천 (22초): 19.3코어</title></circle>
+<circle cx="644.1" cy="128.8" r="10" fill="transparent"><title>DXVK · 좀비 75~80천 (23초): 19.2코어</title></circle>
+<circle cx="681.6" cy="121.0" r="10" fill="transparent"><title>DXVK · 좀비 80~85천 (26초): 20.0코어</title></circle>
+<circle cx="719.0" cy="124.7" r="10" fill="transparent"><title>DXVK · 좀비 85~90천 (32초): 19.6코어</title></circle>
+<circle cx="756.4" cy="123.8" r="10" fill="transparent"><title>DXVK · 좀비 90~95천 (32초): 19.7코어</title></circle>
+<circle cx="793.9" cy="116.2" r="10" fill="transparent"><title>DXVK · 좀비 95~100천 (35초): 20.5코어</title></circle>
+<circle cx="831.3" cy="128.4" r="10" fill="transparent"><title>DXVK · 좀비 100~105천 (340초): 19.2코어</title></circle>
+<circle class="f-d3d9 ring" cx="831.3" cy="126.1" r="4.5" stroke-width="2"/>
+<line class="s-d3d9" x1="837.3" y1="126.1" x2="860" y2="126.1" stroke-width="1"/>
+<text class="t1" x="864" y="124.1" font-size="12" font-weight="600">Direct3D 9</text>
+<text class="t2" x="864" y="139.1" font-size="11">19.5코어</text>
+<circle class="f-dxvk ring" cx="831.3" cy="128.4" r="4.5" stroke-width="2"/>
+<line class="s-dxvk" x1="837.3" y1="128.4" x2="860" y2="156.1" stroke-width="1"/>
+<text class="t1" x="864" y="154.1" font-size="12" font-weight="600">DXVK</text>
+<text class="t2" x="864" y="169.1" font-size="11">19.2코어</text>
+</svg>

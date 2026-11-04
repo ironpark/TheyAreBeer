@@ -1,6 +1,7 @@
 # Draws the README's benchmark charts (docs/charts/*.svg) from scripts\bench.ps1 and compare.exe results.
 #   python scripts/charts.py --game <bench dir with chipmunk-1.csv, rapier-1.csv, original-1.csv>
-#                            [--compare <compare.txt>] [--dxvk <D3D9 rapier-1.csv> <DXVK rapier-1.csv>] [--out docs/charts]
+#                            [--compare <compare.txt>] [--d3d9 <rapier-1.csv> ...] [--dxvk <rapier-1.csv> ...] [--out docs/charts]
+# --d3d9 / --dxvk: runs of the same test without and with DXVK; the runs of each side are pooled per zombie bin.
 # compare.txt: lines "N=<bodies> <engine>: orig <ms> new <ms>" and "T=<threads> <engine>: orig <ms> new <ms>".
 # Plain SVG, no dependencies. Light and dark colors follow prefers-color-scheme; every point has a <title> tooltip.
 import argparse, csv, math, os, re, sys
@@ -133,7 +134,7 @@ def write(out, name, text):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--game'); ap.add_argument('--compare'); ap.add_argument('--dxvk', nargs=2); ap.add_argument('--out', default='docs/charts')
+    ap.add_argument('--game'); ap.add_argument('--compare'); ap.add_argument('--d3d9', nargs='+'); ap.add_argument('--dxvk', nargs='+'); ap.add_argument('--out', default='docs/charts')
     a = ap.parse_args()
     xt = [0, 20000, 40000, 60000, 80000, 100000]
     if a.game:
@@ -174,13 +175,14 @@ def main():
             for e, nm in ENGINES[1:]:
                 if e in t: c.add(e, nm, [(b, nw, f'스레드 {b}') for b, _, nw in sorted(t[e])], lambda v: f'{v:.1f} ms', True)
             write(a.out, 'compare-threads.svg', c.svg([0, 3, 7, 15], [0, 50, 100, 150, 200], lambda v: f'{v:g}', lambda v: f'{v:g}'))
-    if a.dxvk:
-        base, dx = load_run(a.dxvk[0]), load_run(a.dxvk[1])
-        c = Chart('DXVK: 프레임 시간', 'Rapier, 같은 시험 조건. 회색 = 시스템 Direct3D 9, 파랑 = DXVK (Vulkan)', '좀비 수', 'ms', (0, 105000), (0, 140))
+    if a.d3d9 and a.dxvk:
+        base = [r for f in a.d3d9 for r in load_run(f)]; dx = [r for f in a.dxvk for r in load_run(f)]
+        runs = f'Direct3D 9 {len(a.d3d9)}회 · DXVK {len(a.dxvk)}회 평균'
+        c = Chart('DXVK: 프레임 시간', f'Rapier, 같은 시험 조건, {runs}. 회색 = 시스템 Direct3D 9, 파랑 = DXVK (Vulkan)', '좀비 수', 'ms', (0, 105000), (0, 140))
         c.add('d3d9', 'Direct3D 9', binned(base, 'frame_avg_ms'), lambda v: f'{v:.0f} ms')
         c.add('dxvk', 'DXVK', binned(dx, 'frame_avg_ms'), lambda v: f'{v:.0f} ms')
         write(a.out, 'dxvk-frame.svg', c.svg(xt, [0, 35, 70, 105, 140], man, lambda v: f'{v:g}'))
-        c = Chart('DXVK: 프로세스 CPU 사용량', '논리 코어 수 기준. 좀비가 적을 때는 DXVK가 프레임을 더 많이 그려 CPU를 더 쓴다', '좀비 수', '코어', (0, 105000), (0, 24))
+        c = Chart('DXVK: 프로세스 CPU 사용량', f'논리 코어 수 기준, {runs}. 좀비가 적을 때는 DXVK가 프레임을 더 많이 그려 CPU를 더 쓴다', '좀비 수', '코어', (0, 105000), (0, 24))
         c.add('d3d9', 'Direct3D 9', binned(base, 'g_cpu_cores'), lambda v: f'{v:.1f}코어')
         c.add('dxvk', 'DXVK', binned(dx, 'g_cpu_cores'), lambda v: f'{v:.1f}코어')
         write(a.out, 'dxvk-cpu.svg', c.svg(xt, [0, 6, 12, 18, 24], man, lambda v: f'{v:g}'))

@@ -1,5 +1,6 @@
 # Install the built TABPerf into the game's Mods folder (the game files are not changed).
-#   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 [-Engine chipmunk|rapier|original] [-GameDir <folder>] [-Uninstall]
+#   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 [-Engine chipmunk|rapier|original] [-Dxvk on|off] [-GameDir <folder>]
+#     [-Uninstall]
 # Copies into <game>\Mods\TABPerf:
 #   TABPerf.dll, ModInfos.json                       mod\out
 #   chipmunk\DXPhysicsNative.dll                     native\out (multi-core Chipmunk2D)
@@ -8,8 +9,12 @@
 # (chipmunk by default); -Engine writes that setting.
 # An older install put the engine into the game folder itself (DXPhysicsNative.dll, kept DXPhysicsNative.dll.orig):
 # the game's own DLL is put back there.
+# -Dxvk on: puts DXVK's 64-bit d3d9.dll (Direct3D 9 on Vulkan, the official release below, downloaded once into
+# native\out\dxvk and checked by SHA-256) into Mods\TABPerf\dxvk and writes "dxvk": true to engine.json; the mod then
+# loads it when the game starts. -Dxvk off writes "dxvk": false and removes Mods\TABPerf\dxvk.
 # -Uninstall removes Mods\TABPerf (settings and logs in %APPDATA%\TABPerf stay).
-param([ValidateSet('', 'chipmunk', 'rapier', 'original')][string]$Engine = '', [string]$GameDir = '', [switch]$Uninstall)
+param([ValidateSet('', 'chipmunk', 'rapier', 'original')][string]$Engine = '', [ValidateSet('', 'on', 'off')][string]$Dxvk = '',
+  [string]$GameDir = '', [switch]$Uninstall)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib\game.ps1')
@@ -30,6 +35,30 @@ if (-not $Uninstall) {
   foreach ($f in 'TABPerf.dll', 'ModInfos.json') { if (-not (Test-Path (Join-Path $modOut $f))) { throw "Missing mod\out\$f - run scripts\build.ps1 -Target mod first" } }
   if ($engines.Contains($Engine) -and -not (Test-Built $Engine)) { throw "Engine $Engine is not built - run scripts\build.ps1 -Target $Engine first" }
 }
+# DXVK release (https://github.com/doitsujin/dxvk, zlib license)
+$dxvkVersion = '3.1.1'
+$dxvkSha256 = '40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608'
+function Get-DxvkD3d9 {
+  $dir = Join-Path $out 'dxvk'; $dll = Join-Path $dir 'd3d9.dll'; $stamp = Join-Path $dir 'version.txt'
+  if ((Test-Path $dll) -and (Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $dxvkVersion)) { return $dll }
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  $tgz = Join-Path $dir "dxvk-$dxvkVersion.tar.gz"
+  Write-Host "DXVK: downloading $dxvkVersion"
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  Invoke-WebRequest -UseBasicParsing "https://github.com/doitsujin/dxvk/releases/download/v$dxvkVersion/dxvk-$dxvkVersion.tar.gz" -OutFile $tgz
+  $sha = (Get-FileHash $tgz -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($sha -ne $dxvkSha256) { Remove-Item $tgz; throw "DXVK download: SHA-256 $sha, expected $dxvkSha256" }
+  $tmp = Join-Path $dir 'extract'; if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }; New-Item -ItemType Directory $tmp | Out-Null
+  # Windows' own tar (bsdtar): a GNU tar earlier in PATH (Git) reads "C:\..." as a remote host
+  & (Join-Path $env:WINDIR 'System32\tar.exe') -xzf $tgz -C $tmp "dxvk-$dxvkVersion/x64/d3d9.dll"
+  if ($LASTEXITCODE -ne 0) { throw 'DXVK: could not extract x64/d3d9.dll' }
+  Copy-Item (Join-Path $tmp "dxvk-$dxvkVersion\x64\d3d9.dll") $dll -Force
+  Remove-Item $tmp -Recurse -Force; Remove-Item $tgz
+  Set-Content $stamp $dxvkVersion
+  return $dll
+}
+if ($Dxvk -eq 'on' -and -not $Uninstall) { $dxvkDll = Get-DxvkD3d9 }
+
 $engineDlls = @($engines.Values | ForEach-Object { $_.files } | ForEach-Object { Split-Path -Leaf $_ } | Select-Object -Unique)
 
 # An older install put the engine into the game folder itself and kept the game's DLL as DXPhysicsNative.dll.orig:
@@ -63,20 +92,25 @@ try {
       Copy-Item $files $dir
       Write-Host "Engine ${e}: $(($files | ForEach-Object { Split-Path -Leaf $_ }) -join ', ')"
     }
+    $dxvkDir = Join-Path $mod 'dxvk'
+    if ($Dxvk -eq 'on') { New-Item -ItemType Directory -Force $dxvkDir | Out-Null; Copy-Item $dxvkDll $dxvkDir -Force; Write-Host "DXVK: $dxvkVersion (dxvk\d3d9.dll)" }
+    elseif ($Dxvk -eq 'off' -and (Test-Path $dxvkDir)) { Remove-Item $dxvkDir -Recurse -Force; Write-Host 'DXVK: removed' }
     Write-Host "Mod: $mod"
   }
 }
 catch [UnauthorizedAccessException] { throw "No write access to $GameDir - run this script from an administrator PowerShell." }
 
-# ---------- engine choice (engine.json) ----------
-if ($Engine -and -not $Uninstall) {
+# ---------- engine choice and DXVK (engine.json) ----------
+if (($Engine -or $Dxvk) -and -not $Uninstall) {
   $cfgDir = Join-Path $env:APPDATA 'TABPerf'; $cfg = Join-Path $cfgDir 'engine.json'
   $o = if (Test-Path $cfg) { Get-Content $cfg -Raw | ConvertFrom-Json }
   if ($null -eq $o) { $o = New-Object PSObject }
-  $o | Add-Member -NotePropertyName physicsEngine -NotePropertyValue $Engine -Force
+  if ($Engine) { $o | Add-Member -NotePropertyName physicsEngine -NotePropertyValue $Engine -Force }
+  if ($Dxvk) { $o | Add-Member -NotePropertyName dxvk -NotePropertyValue ($Dxvk -eq 'on') -Force }
   New-Item -ItemType Directory -Force $cfgDir | Out-Null
   [IO.File]::WriteAllText($cfg, ($o | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
-  Write-Host "Engine: $Engine ($cfg)"
+  if ($Engine) { Write-Host "Engine: $Engine ($cfg)" }
+  if ($Dxvk) { Write-Host "DXVK: $Dxvk ($cfg)" }
 }
 
 if (-not $Uninstall -and -not (Test-LoaderPatched (Join-Path $GameDir $TabExe))) {

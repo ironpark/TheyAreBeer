@@ -185,6 +185,14 @@
 #### 수정
 - `DX_SetOption(204, -1)`(단계 카운터 확인)이 물리 단계가 끝날 때까지 기다리지 않습니다. 벤치가 1초마다 부릅니다.
 
+### DXVK (선택)
+
+#### 추가
+- `engine.json`의 `"dxvk": true`(또는 `TABPERF_DXVK=1`)이면 모드가 시작할 때 모드 폴더의 `dxvk\d3d9.dll`([DXVK](https://github.com/doitsujin/dxvk))을 먼저 불러, 게임의 Direct3D 9가 Vulkan 위에서 돕니다. 게임 폴더는 건드리지 않습니다. `dxvkMaxFps`(`TABPERF_DXVK_FPS`)로 프레임 수를 제한합니다.
+- `scripts\install.ps1 -Dxvk on|off`: DXVK 공식 릴리스 3.1.1을 받아 SHA-256을 확인하고 64비트 `d3d9.dll`을 넣거나 뺍니다.
+- 벤치 `engine` 열과 로그에 DXVK 사용 여부(`+ DXVK`)를 남깁니다.
+- 측정(Rapier): 6만 마리 이상에서 프레임 4~7% 단축, 게임 시간·CPU는 거의 같음. 좀비가 적을 때는 FPS와 CPU 사용량이 늘어 기본은 꺼짐입니다. ([README](README.md#dxvk))
+
 ### 모드 소스 구성
 
 #### 변경

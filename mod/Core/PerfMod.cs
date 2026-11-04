@@ -32,6 +32,7 @@ namespace Billions
                 var dom = AppDomain.CurrentDomain; object first = dom.GetData(LoadedKey);
                 if (first != null) { Log.Info("이 패치가 이미 다른 폴더에서 실렸다(" + first + ") — 여기(" + (mod != null ? mod.ModPath : "?") + ")는 쉰다"); return; }
                 dom.SetData(LoadedKey, mod != null && mod.ModPath != null ? mod.ModPath : "?");
+                Dxvk.Load(mod != null ? mod.ModPath : null);   // first: before the game's renderer loads d3d9.dll
                 Install(mod != null ? mod.ModPath : null);
             }
             catch (Exception e) { Log.Error("perf OnLoad", e); }

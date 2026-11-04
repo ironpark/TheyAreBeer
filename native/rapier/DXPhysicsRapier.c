@@ -95,6 +95,7 @@ struct DxBody {
 	LONG64 rpos, rvel; LONG rangle, rangvel;   /* what Rapier holds (pulled or pushed last) */
 	unsigned pulled;          /* step stamp of the last pull */
 	int appCcd;               /* CCD split tier last given to Rapier: 0 none, 1 bullet, 2 soft */
+	int grp, gslot;           /* body group (DX_GroupNew id + 1, 0 none) and index in it; under g_grplk */
 };
 
 typedef struct { unsigned long long a, b; int ignore; } DxPair;   /* a = type-1 shape, b = type-0 shape */
@@ -118,6 +119,12 @@ static struct R2EventCollector *g_events;
 static int g_sleep = 1;
 static void *g_space_token = &g_space_token;
 static SRWLOCK g_world = SRWLOCK_INIT, g_index = SRWLOCK_INIT;
+/* body groups, see "body groups" below */
+typedef struct { DxBody **b; int n, cap; int gen; int used; } DxGroup;
+static DxGroup *g_grps; static int g_ngrps, g_capgrps;
+static SRWLOCK g_grplk = SRWLOCK_INIT;
+#define GRP_SLOTS 4096
+static void group_clear(DxGroup *g) { for (int i = 0; i < g->n; i++) g->b[i]->grp = 0; g->n = 0; }
 /* Call diagnostics, read with DX_SetOption(340 + k) (times in microseconds), reset with 399: 0/1 Body_SetAngle time/calls,
    2/3 Body_SetSize, 4/5 Body_Dispose, 6/7 Body_AddSensor (the times include waiting for g_world, which a step holds),
    8 pending entries at index rebuilds, 9 rebuilds, 10/11 ray walk check (DX_RAPIER_RAYWALK=2): first hits that differ
@@ -832,6 +839,7 @@ DX_EXPORT void *Space_Create(float gravityX, float gravityY, int iterations)
 		/* The previous level's records stay allocated (the game may still hold their pointers), detached. */
 		for (int i = 0; i < g_nbodies; i++) { DxBody *b = g_bodies[i]; b->dead = 1; for (DxShape *s = b->shapes; s; s = s->next) s->dead = 1; }
 		g_nbodies = 0; g_nshapes = 0; g_npairs = 0; g_nawake = 0;
+		AcquireSRWLockExclusive(&g_grplk); for (int k = 0; k < g_ngrps; k++) { group_clear(&g_grps[k]); g_grps[k].used = 0; } ReleaseSRWLockExclusive(&g_grplk);
 		if (g_byIndex) memset(g_byIndex, 0, g_capIndex * sizeof(DxShape *));
 		AcquireSRWLockExclusive(&g_index); index_free(g_idx); g_idx = NULL; g_npending = 0; ReleaseSRWLockExclusive(&g_index);
 		r2FreeWorld(g_rw);
@@ -1479,6 +1487,103 @@ DX_EXPORT DxShape *Body_AddSensor(DxBody *body, int shapeType, float width, floa
 	LK_TIME(6, t0);
 	return s;
 }
+/* ---------- body groups (TABPerf: the swarm minimap indicator) ----------
+   A group is a set of body records whose cells the mod reads in one call (DX_GroupCells), instead of walking its own
+   list of units every logic tick. A body is in at most one group; Body_Dispose takes it out before the record goes to
+   the graveyard, and Space_Create empties every group (the previous level's records stay allocated), so a group never
+   holds a freed record. Ids carry a generation (slot | gen << 12), so a stale id (an old level's, or a freed group's)
+   fails instead of reaching a reused slot. The group lock is taken after g_world, never before it. */
+
+static DxGroup *group_of(int id)   /* caller holds g_grplk */
+{
+	if (id < 0) return NULL;
+	int slot = id & (GRP_SLOTS - 1), gen = id >> 12;
+	if (slot >= g_ngrps || !g_grps[slot].used || g_grps[slot].gen != gen) return NULL;
+	return &g_grps[slot];
+}
+static void group_remove(DxBody *b)   /* caller holds g_grplk exclusively */
+{
+	if (!b->grp) return;
+	DxGroup *g = &g_grps[b->grp - 1];
+	int i = b->gslot; DxBody *last = g->b[--g->n];
+	g->b[i] = last; last->gslot = i;
+	b->grp = 0;
+}
+
+/* New empty group: its id (>= 0), or -1 when all GRP_SLOTS are in use. */
+DX_EXPORT int DX_GroupNew(void)
+{
+	AcquireSRWLockExclusive(&g_grplk);
+	int slot = 0;
+	while (slot < g_ngrps && g_grps[slot].used) slot++;
+	if (slot == g_ngrps)
+	{
+		if (g_ngrps == GRP_SLOTS) { ReleaseSRWLockExclusive(&g_grplk); return -1; }
+		g_grps = (DxGroup *)grow(g_grps, &g_capgrps, g_ngrps + 1, sizeof *g_grps);
+		memset(&g_grps[g_ngrps++], 0, sizeof *g_grps);
+	}
+	DxGroup *g = &g_grps[slot];
+	g->used = 1; g->n = 0; g->gen = (g->gen + 1) & 0x7FFFF;
+	int id = slot | (g->gen << 12);
+	ReleaseSRWLockExclusive(&g_grplk);
+	return id;
+}
+
+DX_EXPORT void DX_GroupFree(int id)
+{
+	AcquireSRWLockExclusive(&g_grplk);
+	DxGroup *g = group_of(id);
+	if (g) { group_clear(g); g->used = 0; }
+	ReleaseSRWLockExclusive(&g_grplk);
+}
+
+/* Adds bodies (a body in another group moves; null, disposed and already-member ones are skipped). Returns the number
+   added, or -1 for a stale id. */
+DX_EXPORT int DX_GroupAdd(int id, DxBody **bodies, int n)
+{
+	int added = 0;
+	AcquireSRWLockExclusive(&g_grplk);
+	DxGroup *g = group_of(id);
+	if (!g) { ReleaseSRWLockExclusive(&g_grplk); return -1; }
+	int gi = (int)(g - g_grps) + 1;
+	for (int k = 0; k < n; k++)
+	{
+		DxBody *b = bodies[k];
+		if (!b || b->dead || b->grp == gi) continue;
+		group_remove(b);
+		g->b = (DxBody **)grow(g->b, &g->cap, g->n + 1, sizeof *g->b);
+		b->grp = gi; b->gslot = g->n; g->b[g->n++] = b;
+		added++;
+	}
+	ReleaseSRWLockExclusive(&g_grplk);
+	return added;
+}
+
+/* The members still alive - head shape category not 0: the game clears it when a unit dies (CLife), and keeps the body
+   for the death animation - and the sums of their cells (DXWorldGrid.CellFromPoint: each position coordinate truncated
+   to int; int sums, wrapping like the game's Point.Add). out[0] alive, out[1] sum x, out[2] sum y. Returns the number of
+   members, or -1 for a stale id. */
+DX_EXPORT int DX_GroupCells(int id, int *out)
+{
+	AcquireSRWLockShared(&g_grplk);
+	DxGroup *g = group_of(id);
+	if (!g) { ReleaseSRWLockShared(&g_grplk); out[0] = out[1] = out[2] = 0; return -1; }
+	unsigned alive = 0, sx = 0, sy = 0;
+	DxBody **b = g->b; int n = g->n;
+	for (int i = 0; i < n; i++)
+	{
+		if (i + 8 < n) _mm_prefetch((const char *)b[i + 8], _MM_HINT_T0);
+		const DxBody *r = b[i];
+		const DxShape *s = r->shapes;
+		if (r->dead || (s && s->cat == 0)) continue;
+		Pk p = upk(r->pos);
+		alive++; sx += (unsigned)(int)p.f.x; sy += (unsigned)(int)p.f.y;
+	}
+	ReleaseSRWLockShared(&g_grplk);
+	out[0] = (int)alive; out[1] = (int)sx; out[2] = (int)sy;
+	return n;
+}
+
 DX_EXPORT void Body_Dispose(DxBody *body)
 {
 	DXD(7, body, body ? body->dead : 0, g_nbodies, 0, 0);
@@ -1490,6 +1595,8 @@ DX_EXPORT void Body_Dispose(DxBody *body)
 		r2RemoveRigidBody(body->h, 1);
 		body->dead = 1;
 		remove_body_record(body);
+		/* always under the lock: DX_GroupAdd checks dead under it, so it either sees dead or is undone here */
+		AcquireSRWLockExclusive(&g_grplk); group_remove(body); ReleaseSRWLockExclusive(&g_grplk);
 		for (DxShape *s = body->shapes, *n; s; s = n) { n = s->next; grave(s); }
 		grave(body);
 	}
@@ -1658,6 +1765,8 @@ DX_EXPORT int DX_SetOption(int name, int value)
 	if (name == 204)
 	{
 		load_rapier();
+		/* a query (-1) reads the flag without waiting for g_world, which a step holds (the bench asks every second) */
+		if (value < 0 && g_rw) return g_counters_on;
 		AcquireSRWLockExclusive(&g_world);
 		if (value >= 0) { g_counters_want = value != 0; apply_counters(); }
 		int on = g_rw ? g_counters_on : (g_counters_want > 0 && g_step_counters != NULL);

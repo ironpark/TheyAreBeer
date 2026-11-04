@@ -29,6 +29,10 @@ namespace Billions
     {
         public static bool Enabled;
         static int _factor = 4;
+        // DX_SetOption 340-347 pairs (time, calls), in this order
+        static readonly string CallHeader = string.Concat(Array.ConvertAll(new[] { "angle", "size", "dispose", "sensor" }, k => ",n_" + k + "_per_s,n_" + k + "_ms"));
+        static readonly string QueryHeader = string.Concat(Array.ConvertAll(new[] { "area", "radius", "fast", "near", "ray", "space" },
+            k => ",q_" + k + "_per_s,q_" + k + "_ms,q_" + k + "_lock_ms,q_" + k + "_cb_ms,q_" + k + "_cand,q_" + k + "_hits"));
         static string _engine;   // read in the first level: the game loads its physics DLL after the mod installs
         static bool _keyDown;
         static volatile int _pending;
@@ -241,6 +245,8 @@ namespace Billions
                     _engine = PerfMod.PhysicsDll().Replace(',', ' '); Log.Info("bench: 물리 DLL — " + _engine);
                     // Rapier's stage counters cost about 7% of the step, so they are on only with DX_RAPIER_COUNTERS=1 (bench.ps1 -Counters)
                     if (PerfMod.PhysOpt(200, 0) == 2) Log.Info("bench: Rapier 단계 카운터 " + (PerfMod.PhysOpt(204, -1) == 1 ? "켬" : "끔"));
+                    // the wrapper's timed call and query diagnostics (n_angle_* ... q_*) read clocks on hot paths: on for the bench only
+                    if (PerfMod.PhysOpt(200, 0) == 2) PerfMod.PhysOpt(356, 1);
                     int adapt = PerfMod.PhysOpt(200, 0) == 2 ? PerfMod.PhysOpt(205, 0) : -1;
                     if (adapt >= 0) Log.Info("bench: Rapier 하위 단계 " + (adapt > 0 ? "자동 " + adapt / 100 + "~" + adapt % 100 : "고정"));
                 }
@@ -303,6 +309,20 @@ namespace Billions
                     double cores = _cpuWall > 0 ? (cpu - _cpuLast) / ((wall - _cpuWall) * 1000.0 / Stopwatch.Frequency) : 0;
                     _cpuLast = cpu; _cpuWall = wall;
                     game += "," + cores.ToString("0.00", c);
+                    // Rapier wrapper calls this second (DX_SetOption 340-349): Body_SetAngle / SetSize / Dispose / AddSensor
+                    // calls and total ms (with the wait for the world lock a step holds), pending index entries per rebuild
+                    var lk = new int[13]; for (int k = 0; k < 13; k++) lk[k] = PerfMod.PhysOpt(340 + k, 0);
+                    for (int k = 0; k < 8; k += 2) game += "," + lk[k + 1].ToString(c) + "," + (lk[k] / 1000.0).ToString("0.0", c);
+                    game += "," + (lk[9] > 0 ? (double)lk[8] / lk[9] : 0).ToString("0", c) + "," + lk[10].ToString(c) + "," + lk[11].ToString(c) + "," + lk[12].ToString(c);   // ray walk check (DX_RAPIER_RAYWALK=2), category changes
+                    // queries by kind (DX_SetOption 360 + kind * 6 + field): calls, total ms, ms waiting for the index lock,
+                    // ms in the game's callbacks, index entries looked at and hits per call
+                    for (int q = 0; q < 6; q++)
+                    {
+                        int n = PerfMod.PhysOpt(360 + q * 6, 0);
+                        game += "," + n.ToString(c);
+                        for (int j = 1; j <= 3; j++) game += "," + (PerfMod.PhysOpt(360 + q * 6 + j, 0) / 1000.0).ToString("0.0", c);
+                        for (int j = 4; j <= 5; j++) game += "," + (n > 0 ? PerfMod.PhysOpt(360 + q * 6 + j, 0) / (double)n : 0).ToString("0.0", c);
+                    }
                 }
                 if (tick)
                 {
@@ -325,7 +345,7 @@ namespace Billions
                     steps.ToString(c), (steps > 0 ? Ms(st) / steps : 0).ToString("0.00", c), Ms(sm).ToString("0.00", c),
                     zombies.ToString(c), note, sections, game);
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(CsvPath)));
-                if (!_header && !File.Exists(CsvPath)) File.AppendAllText(CsvPath, "time,engine,paused,frames,frame_avg_ms,frame_max_ms,phys_steps,step_avg_ms,step_max_ms,zombies,note,r_push_ms,r_step_ms,r_pull_ms,r_pairs_ms,r_index_ms,r_substeps,r_contact_pairs," + StageHeader + ",g_postmethods_ms,g_pre_ms,g_post_ms,g_syncwait_ms,g_logicwait_ms,g_ia_per_s,g_ia_ms,n_create_per_s,n_create_us,n_settype_per_s,n_settype_us,n_insert_us,n_collider_us,n_indexwait_ms,g_update_ms,g_speed,g_phys_usage,g_ia_usage,g_clock_rate,l_calls,l_wait_ms,l_tasks,l_start_ms,l_task_ms,l_ticks,l_idle,l_block_ia_ms,l_block_phys_ms,l_run_ms,g_cpu_cores\r\n");
+                if (!_header && !File.Exists(CsvPath)) File.AppendAllText(CsvPath, "time,engine,paused,frames,frame_avg_ms,frame_max_ms,phys_steps,step_avg_ms,step_max_ms,zombies,note,r_push_ms,r_step_ms,r_pull_ms,r_pairs_ms,r_index_ms,r_substeps,r_contact_pairs," + StageHeader + ",g_postmethods_ms,g_pre_ms,g_post_ms,g_syncwait_ms,g_logicwait_ms,g_ia_per_s,g_ia_ms,n_create_per_s,n_create_us,n_settype_per_s,n_settype_us,n_insert_us,n_collider_us,n_indexwait_ms,g_update_ms,g_speed,g_phys_usage,g_ia_usage,g_clock_rate,l_calls,l_wait_ms,l_tasks,l_start_ms,l_task_ms,l_ticks,l_idle,l_block_ia_ms,l_block_phys_ms,l_run_ms,g_cpu_cores" + CallHeader + ",n_pending,n_ray_diff,n_ray_tie,n_catset" + QueryHeader + "\r\n");
                 _header = true;
                 File.AppendAllText(CsvPath, line + "\r\n");
             }

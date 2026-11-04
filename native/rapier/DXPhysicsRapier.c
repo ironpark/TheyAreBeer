@@ -215,6 +215,11 @@ static DxWriteStatesFn g_write_states;   /* NULL: not in the loaded library, or 
 #define DX_NCOUNTERS 20
 typedef R2Status (RAPIER_CALL *DxStepCountersFn)(const struct R2World *world, double *buffer, size_t capacity, size_t *count);
 static DxStepCountersFn g_step_counters;
+/* r2SolverDiag (rapier-solver-stats.patch): the parallel solver's barrier waits and serial overflow time, recorded while
+   RAPIER_SOLVER_DIAG is set. DX_SetOption(400) takes them (and resets them), 401 + k reads value k (times in us). */
+typedef R2Status (RAPIER_CALL *DxSolverDiagFn)(double *buffer, size_t capacity, size_t *count);
+static DxSolverDiagFn g_solver_diag;
+static double g_sdiag[9];
 static int g_counters_want = -1, g_counters_on;
 static double g_cnt[DX_NCOUNTERS];
 /* The delay-load helper asks before loading rapier2d_ffi.dll: hand it the variant chosen above. */
@@ -241,6 +246,10 @@ static int load_rapier(void)
 	   frames and logic, and a 3-6% faster game clock (r2Step +4% in the harness, with no other load). Set before the
 	   library reads it; RAPIER_SYNC_SPIN=0 keeps the spinning. */
 	{ char t[16]; if (!GetEnvironmentVariableA("RAPIER_SYNC_SPIN", t, sizeof t)) SetEnvironmentVariableA("RAPIER_SYNC_SPIN", "2000"); }
+	/* rapier-solver-zorder.patch: solver bodies in Morton order every 16 steps and each color's contacts by body slot, for cache
+	   locality of the contact solve (0 turns either off) */
+	{ char t[16]; if (!GetEnvironmentVariableA("RAPIER_BODY_SORT", t, sizeof t)) SetEnvironmentVariableA("RAPIER_BODY_SORT", "16"); }
+	{ char t[16]; if (!GetEnvironmentVariableA("RAPIER_CONTACT_SORT", t, sizeof t)) SetEnvironmentVariableA("RAPIER_CONTACT_SORT", "1"); }
 	int level = env_int("DX_RAPIER_AVX2", 0, 1, 1) ? cpu_simd() : SIMD_BASE;
 	if (level == SIMD_AVX512 && !env_int("DX_RAPIER_AVX512", 0, 1, 1)) level = SIMD_AVX2;
 	static const wchar_t *const names[] = { L"rapier2d_ffi.dll", L"rapier2d_ffi_avx2.dll", L"rapier2d_ffi_avx512.dll" };
@@ -258,6 +267,7 @@ static int load_rapier(void)
 		if (!g_write_states) g_write_states = (DxWriteStatesFn)(void *)GetProcAddress(g_rapier_mod, "r2RigidBodyWriteStates");
 	}
 	if (g_rapier_ok) g_step_counters = (DxStepCountersFn)(void *)GetProcAddress(g_rapier_mod, "r2StepCounters");
+	if (g_rapier_ok) g_solver_diag = (DxSolverDiagFn)(void *)GetProcAddress(g_rapier_mod, "r2SolverDiag");
 	/* An unoptimized (debug) Rapier is about 100x slower; it still runs, and the mod log warns (DX_SetOption(202)). */
 	if (g_rapier_ok) { const char *prof = r2BuildProfile(); g_rapier_release = prof && strcmp(prof, "release") == 0; }
 	return g_rapier_ok;
@@ -1641,6 +1651,8 @@ DX_EXPORT int DX_SetOption(int name, int value)
 	if (name >= 330 && name < 337) return (int)g_life[name - 330];
 	if (name >= 360 && name < 396) { int k = name - 360, f = k % 6; LONG64 v = g_qs[k / 6].v[f]; return (int)(f >= 1 && f <= 3 ? v / 1000 : v); }
 	if (name >= 340 && name < 353) { int k = name - 340; LONG64 v = g_lk[k]; return (int)(k < 8 && !(k & 1) ? v / 1000 : v); }
+	if (name == 400) { size_t n = 0; memset(g_sdiag, 0, sizeof g_sdiag); return g_solver_diag && g_solver_diag(g_sdiag, 9, &n) == R2_OK ? (int)n : -1; }
+	if (name >= 401 && name < 410) { int k = name - 401; return (int)(k == 0 || k == 2 || k == 3 ? g_sdiag[k] / 1000.0 : g_sdiag[k]); }
 	if (name == 356) { if (value >= 0) g_diag = value != 0; return g_diag; }   /* timed diagnostics on (1) / off (0) / ask (-1) */
 	if (name == 399) { memset(g_prof, 0, sizeof g_prof); memset(g_cnt, 0, sizeof g_cnt); memset(g_life, 0, sizeof g_life); for (int k = 0; k < 13; k++) InterlockedExchange64(&g_lk[k], 0); for (int k = 0; k < 36; k++) InterlockedExchange64(&g_qs[k / 6].v[k % 6], 0); return 0; }
 	if (name == 204)

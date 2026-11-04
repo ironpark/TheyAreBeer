@@ -1,0 +1,187 @@
+diff --git a/bindings/c/src/pipeline.rs b/bindings/c/src/pipeline.rs
+index 6c08a06..2e5789a 100644
+--- a/bindings/c/src/pipeline.rs
++++ b/bindings/c/src/pipeline.rs
+@@ -2367,6 +2367,23 @@ pub unsafe extern "C" fn rpr_step_counters(
+     })
+ }
+ 
++/// Number of values rpr_solver_diag writes.
++pub const RPR_SOLVER_DIAG_COUNT: usize = 9;
++
++/// Staged-solver diagnostics summed since the previous call, then reset (recorded only while the
++/// RAPIER_SOLVER_DIAG environment variable is set): 0 barrier wait ns (all workers), 1 barrier
++/// waits, 2 worker-0 serial overflow ns, 3 worker run ns (all workers), 4 colors, 5 overflow
++/// chunks, 6 chunks, 7 workers, 8 solves (4-7 summed per solve).
++/// @ingroup worlds
++#[rapier_export]
++pub unsafe extern "C" fn rpr_solver_diag(buffer: *mut f64, capacity: usize, count: *mut usize) -> RprStatus {
++    ffi(|| unsafe {
++        let d = rapier::counters::solver_diag_take();
++        let values: [f64; RPR_SOLVER_DIAG_COUNT] = core::array::from_fn(|k| d[k] as f64);
++        copy_out(&values, buffer, capacity, count)
++    })
++}
++
+ /// Read ONLY trusted legacy rigid-world snapshots from debug_deserialize3.rs,
+ /// produced by the identical Rapier build. This is not a stable interchange format.
+ ///
+diff --git a/src/counters/mod.rs b/src/counters/mod.rs
+index e48c8eb..02b64ac 100644
+--- a/src/counters/mod.rs
++++ b/src/counters/mod.rs
+@@ -9,6 +9,49 @@ pub use self::solver_counters::SolverCounters;
+ pub use self::stages_counters::StagesCounters;
+ pub use self::timer::Timer;
+ 
++/// Staged-solver diagnostics (TABPerf), summed until [`solver_diag_take`], recorded only while the
++/// `RAPIER_SOLVER_DIAG` environment variable is set: 0 barrier wait ns (all workers), 1 barrier
++/// waits, 2 worker-0 serial overflow ns, 3 worker run ns (all workers), 4 colors, 5 overflow
++/// chunks, 6 chunks, 7 workers, 8 solves.
++pub const SOLVER_DIAG_COUNT: usize = 9;
++static SOLVER_DIAG: [core::sync::atomic::AtomicU64; SOLVER_DIAG_COUNT] =
++    [const { core::sync::atomic::AtomicU64::new(0) }; SOLVER_DIAG_COUNT];
++
++/// Whether the solver diagnostics are recorded (read once).
++pub fn solver_diag_on() -> bool {
++    #[cfg(feature = "std")]
++    {
++        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++        *ON.get_or_init(|| std::env::var_os("RAPIER_SOLVER_DIAG").is_some())
++    }
++    #[cfg(not(feature = "std"))]
++    {
++        false
++    }
++}
++/// Adds `v` to diagnostic `k` (when recording).
++pub fn solver_diag_add(k: usize, v: u64) {
++    if solver_diag_on() {
++        SOLVER_DIAG[k].fetch_add(v, core::sync::atomic::Ordering::Relaxed);
++    }
++}
++/// A start time for [`solver_diag_since`], `None` when not recording.
++#[cfg(feature = "std")]
++pub fn solver_diag_start() -> Option<std::time::Instant> {
++    solver_diag_on().then(std::time::Instant::now)
++}
++/// Adds the nanoseconds since `start` to diagnostic `k`.
++#[cfg(feature = "std")]
++pub fn solver_diag_since(k: usize, start: Option<std::time::Instant>) {
++    if let Some(t) = start {
++        SOLVER_DIAG[k].fetch_add(t.elapsed().as_nanos() as u64, core::sync::atomic::Ordering::Relaxed);
++    }
++}
++/// Returns the diagnostics and resets them.
++pub fn solver_diag_take() -> [u64; SOLVER_DIAG_COUNT] {
++    core::array::from_fn(|k| SOLVER_DIAG[k].swap(0, core::sync::atomic::Ordering::Relaxed))
++}
++
+ mod ccd_counters;
+ mod collision_detection_counters;
+ mod solver_counters;
+diff --git a/src/dynamics/solver/staged_island_solver/init.rs b/src/dynamics/solver/staged_island_solver/init.rs
+index 710c186..a12c1a4 100644
+--- a/src/dynamics/solver/staged_island_solver/init.rs
++++ b/src/dynamics/solver/staged_island_solver/init.rs
+@@ -654,6 +654,14 @@ impl StagedIslandSolver {
+         };
+ 
+         let ctx_ref = &ctx;
++        if crate::counters::solver_diag_on() {
++            use crate::counters::solver_diag_add as add;
++            add(4, ctx.color_ranges.len() as u64);
++            add(5, ctx.groups.iter().map(|g| g.overflow.len() as u64).sum());
++            add(6, num_chunks as u64);
++            add(7, num_workers as u64);
++            add(8, 1);
++        }
+ 
+         // Parallel build: spawn workers `1..num_workers` into a rayon scope, run worker 0
+         // inline. Non-parallel/wasm build: `num_workers == 1`, worker 0 runs inline and
+@@ -662,17 +670,21 @@ impl StagedIslandSolver {
+         rayon::in_place_scope(|scope| {
+             for worker_id in 1..num_workers {
+                 scope.spawn(move |_| {
++                    let diag = crate::counters::solver_diag_start();
+                     // SAFETY: see `SharedCtx` and the per-stage comments in `run_worker`.
+                     unsafe {
+                         run_worker(ctx_ref, worker_id);
+                     }
++                    crate::counters::solver_diag_since(3, diag);
+                 });
+             }
+ 
++            let diag = crate::counters::solver_diag_start();
+             // SAFETY: see `SharedCtx` and the per-stage comments in `run_worker`.
+             unsafe {
+                 run_worker(ctx_ref, 0);
+             }
++            crate::counters::solver_diag_since(3, diag);
+         });
+ 
+         #[cfg(not(feature = "parallel"))]
+diff --git a/src/dynamics/solver/staged_island_solver/solve.rs b/src/dynamics/solver/staged_island_solver/solve.rs
+index 955f79b..d74edf6 100644
+--- a/src/dynamics/solver/staged_island_solver/solve.rs
++++ b/src/dynamics/solver/staged_island_solver/solve.rs
+@@ -316,9 +316,13 @@ pub(super) unsafe fn solve_pass(
+     // joint overflow stage this one is unconditional: it doubles as the pass'
+     // trailing barrier so every worker leaves solve_pass in lockstep.
+     if worker_id == 0 {
++        #[cfg(feature = "std")]
++        let diag = crate::counters::solver_diag_start();
+         for chunk_id in group.overflow.clone() {
+             solve_chunk(chunk_id);
+         }
++        #[cfg(feature = "std")]
++        crate::counters::solver_diag_since(2, diag);
+ 
+         // The serial tail of the soft contacts.
+         if has_soft_contacts {
+diff --git a/src/dynamics/solver/staged_island_solver/sync.rs b/src/dynamics/solver/staged_island_solver/sync.rs
+index d8ed70b..cf437e1 100644
+--- a/src/dynamics/solver/staged_island_solver/sync.rs
++++ b/src/dynamics/solver/staged_island_solver/sync.rs
+@@ -152,6 +152,10 @@ impl StageSync {
+         let mut spins = 0u32;
+         #[cfg(feature = "std")]
+         let park_after = sync_spin_limit();
++        #[cfg(feature = "std")]
++        let diag = crate::counters::solver_diag_start();
++        #[cfg(feature = "std")]
++        crate::counters::solver_diag_add(1, 1);
+         while self.published.load(Ordering::Acquire) == stage {
+             core::hint::spin_loop();
+             spins += 1;
+@@ -177,6 +181,8 @@ impl StageSync {
+                 spins = 0;
+             }
+         }
++        #[cfg(feature = "std")]
++        crate::counters::solver_diag_since(0, diag);
+         next
+     }
+ 
+diff --git a/src/dynamics/solver/staged_island_solver/worker.rs b/src/dynamics/solver/staged_island_solver/worker.rs
+index f38c2e5..45fdad6 100644
+--- a/src/dynamics/solver/staged_island_solver/worker.rs
++++ b/src/dynamics/solver/staged_island_solver/worker.rs
+@@ -560,6 +560,8 @@ pub(super) unsafe fn run_worker(ctx: &SharedCtx, worker_id: usize) {
+                 // Overflow + generic (multibody) contacts, exclusively on worker 0
+                 // (fused update + warmstart, like the colored chunks above).
+                 if worker_id == 0 {
++                    #[cfg(feature = "std")]
++                    let diag = crate::counters::solver_diag_start();
+                     for chunk_id in group.overflow.clone() {
+                         let solver_bodies = unsafe { &mut (*ctx.velocity_solver).solver_bodies };
+                         #[cfg(feature = "dim3")]
+@@ -588,6 +590,8 @@ pub(super) unsafe fn run_worker(ctx: &SharedCtx, worker_id: usize) {
+                             constraint.warmstart(solver_bodies);
+                         }
+                     }
++                    #[cfg(feature = "std")]
++                    crate::counters::solver_diag_since(2, diag);
+ 
+                     let contacts = unsafe { &mut *ctx.contact_constraints };
+                     let vs = unsafe { &mut *ctx.velocity_solver };

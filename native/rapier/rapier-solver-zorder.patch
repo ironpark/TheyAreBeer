@@ -1,0 +1,221 @@
+diff --git a/src/counters/mod.rs b/src/counters/mod.rs
+index 02b64ac..03708ed 100644
+--- a/src/counters/mod.rs
++++ b/src/counters/mod.rs
+@@ -47,6 +47,36 @@ pub fn solver_diag_since(k: usize, start: Option<std::time::Instant>) {
+         SOLVER_DIAG[k].fetch_add(t.elapsed().as_nanos() as u64, core::sync::atomic::Ordering::Relaxed);
+     }
+ }
++/// TABPerf memory-order switches, read once from the environment: `RAPIER_BODY_SORT=<n>` reorders the
++/// awake bodies along a Morton curve of their positions every `n` steps (0 or unset: never),
++/// `RAPIER_CONTACT_SORT=1` sorts each parallel color's contacts by solver body slot.
++pub fn tabperf_env_u32(name: &'static str, cache: &'static core::sync::atomic::AtomicU32) -> u32 {
++    use core::sync::atomic::Ordering;
++    let v = cache.load(Ordering::Relaxed);
++    if v != u32::MAX {
++        return v;
++    }
++    #[cfg(feature = "std")]
++    let v = std::env::var(name).ok().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0).min(u32::MAX - 1);
++    #[cfg(not(feature = "std"))]
++    let v = {
++        let _ = name;
++        0
++    };
++    cache.store(v, Ordering::Relaxed);
++    v
++}
++/// See [`tabperf_env_u32`].
++pub fn body_sort_period() -> u32 {
++    static C: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
++    tabperf_env_u32("RAPIER_BODY_SORT", &C)
++}
++/// See [`tabperf_env_u32`].
++pub fn contact_sort_on() -> bool {
++    static C: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
++    tabperf_env_u32("RAPIER_CONTACT_SORT", &C) != 0
++}
++
+ /// Returns the diagnostics and resets them.
+ pub fn solver_diag_take() -> [u64; SOLVER_DIAG_COUNT] {
+     core::array::from_fn(|k| SOLVER_DIAG[k].swap(0, core::sync::atomic::Ordering::Relaxed))
+diff --git a/src/dynamics/island_manager/substep_groups.rs b/src/dynamics/island_manager/substep_groups.rs
+index 27c1ac0..19f0e9b 100644
+--- a/src/dynamics/island_manager/substep_groups.rs
++++ b/src/dynamics/island_manager/substep_groups.rs
+@@ -251,6 +251,87 @@ impl IslandManager {
+     }
+ }
+ 
++impl IslandManager {
++    /// TABPerf: every `RAPIER_BODY_SORT` steps, reorders the awake island's bodies (the solver-body
++    /// slots) along a Morton curve of their positions, so bodies that touch sit near each other in
++    /// the solver arrays: the contact solve gathers and scatters two bodies per contact, and in a
++    /// list kept in island-merge order those are cache misses. Same re-stamp and epoch bump as the
++    /// substep-group reorder (every ordering-derived cache rebuilds). Skipped while solve groups
++    /// exist (they need their own order) and for small sets.
++    pub(crate) fn sort_awake_bodies_spatially(&mut self, bodies: &mut RigidBodySet) {
++        use core::sync::atomic::{AtomicU32, Ordering};
++        static TICK: AtomicU32 = AtomicU32::new(0);
++        let period = crate::counters::body_sort_period();
++        if period == 0 || !self.solve_groups.is_empty() {
++            return;
++        }
++        if TICK.fetch_add(1, Ordering::Relaxed) % period != 0 {
++            return;
++        }
++        let Some(awake_id) = self.awake_island else {
++            return;
++        };
++        let n = self.islands[awake_id].bodies.len();
++        if n < 4096 {
++            return;
++        }
++        let list = &self.islands[awake_id].bodies;
++        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
++        let pos: Vec<[f32; 2]> = list
++            .iter()
++            .map(|h| {
++                let t = bodies[*h].translation();
++                let p = [t.x as f32, t.y as f32];
++                for k in 0..2 {
++                    if p[k].is_finite() {
++                        lo[k] = lo[k].min(p[k]);
++                        hi[k] = hi[k].max(p[k]);
++                    }
++                }
++                p
++            })
++            .collect();
++        let scale = [65535.0 / (hi[0] - lo[0]).max(1e-6), 65535.0 / (hi[1] - lo[1]).max(1e-6)];
++        let spread = |v: u32| -> u64 {
++            let mut x = v as u64 & 0xFFFF;
++            x = (x | (x << 8)) & 0x00FF_00FF;
++            x = (x | (x << 4)) & 0x0F0F_0F0F;
++            x = (x | (x << 2)) & 0x3333_3333;
++            (x | (x << 1)) & 0x5555_5555
++        };
++        let mut keyed: Vec<(u64, u32)> = pos
++            .iter()
++            .enumerate()
++            .map(|(i, p)| {
++                let q = |k: usize| -> u32 {
++                    let v = (p[k] - lo[k]) * scale[k];
++                    if v.is_finite() { v.clamp(0.0, 65535.0) as u32 } else { 0 }
++                };
++                ((spread(q(0)) | (spread(q(1)) << 1)) << 32 | i as u64, i as u32)
++            })
++            .collect();
++        #[cfg(feature = "parallel")]
++        {
++            use rayon::prelude::*;
++            keyed.par_sort_unstable_by_key(|k| k.0);
++        }
++        #[cfg(not(feature = "parallel"))]
++        keyed.sort_unstable_by_key(|k| k.0);
++        // Already in order (nothing moved much since the last sort): keep the slots and the caches.
++        if keyed.iter().enumerate().all(|(i, k)| k.1 as usize == i) {
++            return;
++        }
++        let ws = &mut self.substep_groups_workspace.workspace;
++        ws.clear();
++        ws.extend(keyed.iter().map(|k| list[k.1 as usize]));
++        core::mem::swap(&mut self.islands[awake_id].bodies, ws);
++        for (i, handle) in self.islands[awake_id].bodies.iter().enumerate() {
++            bodies.index_mut_internal(*handle).ids.active_set_id = i as u32;
++        }
++        self.bump_active_set_epoch();
++    }
++}
++
+ /// Derives contiguous group ranges from a descending-sorted key sequence.
+ /// The two bodies a touching pair couples: its first manifold's, or the colliders' parents
+ /// for a pair of two soft surfaces.
+diff --git a/src/dynamics/solver/staged_island_solver/init.rs b/src/dynamics/solver/staged_island_solver/init.rs
+index a12c1a4..a3512a4 100644
+--- a/src/dynamics/solver/staged_island_solver/init.rs
++++ b/src/dynamics/solver/staged_island_solver/init.rs
+@@ -329,16 +329,64 @@ impl StagedIslandSolver {
+                 *next_chunk += refs.len().div_ceil(SIMD_WIDTH);
+             };
+ 
+-        if self.groups.len() == 1 {
+-            // Single group (the common case): the historical zero-copy layout,
+-            // slicing the persistent buckets directly.
++        if self.groups.len() == 1 && crate::counters::contact_sort_on() {
++            // TABPerf (RAPIER_CONTACT_SORT): each parallel color's refs copied and sorted by their
++            // lowest solver-body slot, so consecutive chunks gather/scatter nearby bodies. Same-color
++            // constraints touch pairwise-disjoint bodies, so their order within the color (and the
++            // SIMD lane grouping) does not change any result. Reserved up front: segments hold raw
++            // pointers into the vec, which must not reallocate.
++            self.grouped_chunk_refs.reserve(num_two_body);
++            let cap = self.grouped_chunk_refs.capacity();
++            let mut runs: Vec<(u8, usize, usize)> = Vec::new();
+             for (color, refs) in graph.buckets() {
+                 if (color as usize) < NUM_COLORS - 1
+                     && refs.len().div_ceil(SIMD_WIDTH) >= min_color_chunks
+                 {
+-                    let range_start = next_chunk;
+-                    push_segment(&mut self.chunk_segments, &mut next_chunk, refs);
+-                    self.color_ranges.push((color, range_start..next_chunk));
++                    runs.push((color, self.grouped_chunk_refs.len(), refs.len()));
++                    self.grouped_chunk_refs.extend_from_slice(refs);
++                }
++            }
++            debug_assert_eq!(self.grouped_chunk_refs.capacity(), cap);
++            let key = |r: &ContactRef| -> u32 {
++                let ids = store.get(*r).data.solver_body_ids;
++                ids[0].min(ids[1])
++            };
++            {
++                let mut slices: Vec<&mut [ContactRef]> = Vec::with_capacity(runs.len());
++                let mut rest: &mut [ContactRef] = &mut self.grouped_chunk_refs[..];
++                for &(_, _, len) in &runs {
++                    let (head, tail) = rest.split_at_mut(len);
++                    slices.push(head);
++                    rest = tail;
++                }
++                #[cfg(feature = "parallel")]
++                {
++                    use rayon::prelude::*;
++                    slices.par_iter_mut().for_each(|s| s.sort_by_cached_key(key));
++                }
++                #[cfg(not(feature = "parallel"))]
++                for s in slices.iter_mut() {
++                    s.sort_by_cached_key(key);
++                }
++            }
++            for &(color, start, len) in &runs {
++                let range_start = next_chunk;
++                push_segment(&mut self.chunk_segments, &mut next_chunk, &self.grouped_chunk_refs[start..start + len]);
++                self.color_ranges.push((color, range_start..next_chunk));
++            }
++        }
++        if self.groups.len() == 1 {
++            // Single group (the common case): the historical zero-copy layout,
++            // slicing the persistent buckets directly.
++            if !crate::counters::contact_sort_on() {
++                for (color, refs) in graph.buckets() {
++                    if (color as usize) < NUM_COLORS - 1
++                        && refs.len().div_ceil(SIMD_WIDTH) >= min_color_chunks
++                    {
++                        let range_start = next_chunk;
++                        push_segment(&mut self.chunk_segments, &mut next_chunk, refs);
++                        self.color_ranges.push((color, range_start..next_chunk));
++                    }
+                 }
+             }
+ 
+diff --git a/src/pipeline/physics_pipeline/solve.rs b/src/pipeline/physics_pipeline/solve.rs
+index 7ba3202..aed2065 100644
+--- a/src/pipeline/physics_pipeline/solve.rs
++++ b/src/pipeline/physics_pipeline/solve.rs
+@@ -329,6 +329,8 @@ impl PhysicsPipeline {
+             multibody_joints,
+             soft_bodies,
+         );
++        // TABPerf: memory order of the solver bodies (RAPIER_BODY_SORT); same contract as above.
++        islands.sort_awake_bodies_spatially(bodies);
+ 
+         self.counters.stages.island_construction_time.pause();
+ 

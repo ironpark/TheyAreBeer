@@ -1,87 +1,87 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" width="720" height="380" role="img" aria-label="프레임 시간">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="프레임 시간">
 <style>svg{font-family:system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif}.bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.tm{fill:#898781}.grid{stroke:#e1e0d9}.axis{stroke:#c3c2b7}.ring{stroke:#fcfcfb}.ref{stroke:#898781}.s-original{stroke:#2a78d6}.f-original{fill:#2a78d6}.s-chipmunk{stroke:#eb6834}.f-chipmunk{fill:#eb6834}.s-rapier{stroke:#1baf7a}.f-rapier{fill:#1baf7a}@media (prefers-color-scheme: dark){.bg{fill:#1a1a19}.t1{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.axis{stroke:#383835}.ring{stroke:#1a1a19}.s-original{stroke:#3987e5}.f-original{fill:#3987e5}.s-chipmunk{stroke:#d95926}.f-chipmunk{fill:#d95926}.s-rapier{stroke:#199e70}.f-rapier{fill:#199e70}}</style>
-<rect class="bg" width="720" height="380" rx="8"/>
+<rect class="bg" width="1000" height="360" rx="8"/>
 <text class="t1" x="64" y="26" font-size="16" font-weight="600">프레임 시간</text>
 <text class="t2" x="64" y="46" font-size="12">한 프레임을 그리는 데 걸린 평균 시간 (카메라 최대 줌)</text>
-<line class="grid" x1="64" x2="570" y1="328.0" y2="328.0" stroke-width="1"/>
-<text class="tm" x="56" y="332.0" font-size="11" text-anchor="end">0</text>
-<line class="grid" x1="64" x2="570" y1="267.0" y2="267.0" stroke-width="1"/>
-<text class="tm" x="56" y="271.0" font-size="11" text-anchor="end">40</text>
-<line class="grid" x1="64" x2="570" y1="206.0" y2="206.0" stroke-width="1"/>
-<text class="tm" x="56" y="210.0" font-size="11" text-anchor="end">80</text>
-<line class="grid" x1="64" x2="570" y1="145.0" y2="145.0" stroke-width="1"/>
-<text class="tm" x="56" y="149.0" font-size="11" text-anchor="end">120</text>
-<line class="grid" x1="64" x2="570" y1="84.0" y2="84.0" stroke-width="1"/>
+<line class="grid" x1="64" x2="850" y1="308.0" y2="308.0" stroke-width="1"/>
+<text class="tm" x="56" y="312.0" font-size="11" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="850" y1="252.0" y2="252.0" stroke-width="1"/>
+<text class="tm" x="56" y="256.0" font-size="11" text-anchor="end">40</text>
+<line class="grid" x1="64" x2="850" y1="196.0" y2="196.0" stroke-width="1"/>
+<text class="tm" x="56" y="200.0" font-size="11" text-anchor="end">80</text>
+<line class="grid" x1="64" x2="850" y1="140.0" y2="140.0" stroke-width="1"/>
+<text class="tm" x="56" y="144.0" font-size="11" text-anchor="end">120</text>
+<line class="grid" x1="64" x2="850" y1="84.0" y2="84.0" stroke-width="1"/>
 <text class="tm" x="56" y="88.0" font-size="11" text-anchor="end">160</text>
-<line class="axis" x1="64" x2="570" y1="328" y2="328" stroke-width="1"/>
-<text class="tm" x="64.0" y="346" font-size="11" text-anchor="middle">0만</text>
-<text class="tm" x="160.4" y="346" font-size="11" text-anchor="middle">2만</text>
-<text class="tm" x="256.8" y="346" font-size="11" text-anchor="middle">4만</text>
-<text class="tm" x="353.1" y="346" font-size="11" text-anchor="middle">6만</text>
-<text class="tm" x="449.5" y="346" font-size="11" text-anchor="middle">8만</text>
-<text class="tm" x="545.9" y="346" font-size="11" text-anchor="middle">10만</text>
-<text class="tm" x="317.0" y="370" font-size="11" text-anchor="middle">좀비 수</text>
+<line class="axis" x1="64" x2="850" y1="308" y2="308" stroke-width="1"/>
+<text class="tm" x="64.0" y="326" font-size="11" text-anchor="middle">0만</text>
+<text class="tm" x="213.7" y="326" font-size="11" text-anchor="middle">2만</text>
+<text class="tm" x="363.4" y="326" font-size="11" text-anchor="middle">4만</text>
+<text class="tm" x="513.1" y="326" font-size="11" text-anchor="middle">6만</text>
+<text class="tm" x="662.9" y="326" font-size="11" text-anchor="middle">8만</text>
+<text class="tm" x="812.6" y="326" font-size="11" text-anchor="middle">10만</text>
+<text class="tm" x="457.0" y="350" font-size="11" text-anchor="middle">좀비 수</text>
 <text class="tm" x="12" y="70" font-size="11" text-anchor="start">ms</text>
-<path class="s-original" d="M148.3,277.1 L172.4,278.6 L196.5,279.9 L220.6,280.4 L244.7,279.8 L268.8,280.1 L292.9,280.3 L317.0,279.7 L341.1,275.5 L365.2,270.4 L389.3,265.3 L413.4,260.0" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="148.3" cy="277.1" r="10" fill="transparent"><title>원작 · 좀비 15~20천 (3초): 33 ms</title></circle>
-<circle cx="172.4" cy="278.6" r="10" fill="transparent"><title>원작 · 좀비 20~25천 (4초): 32 ms</title></circle>
-<circle cx="196.5" cy="279.9" r="10" fill="transparent"><title>원작 · 좀비 25~30천 (5초): 32 ms</title></circle>
-<circle cx="220.6" cy="280.4" r="10" fill="transparent"><title>원작 · 좀비 30~35천 (7초): 31 ms</title></circle>
-<circle cx="244.7" cy="279.8" r="10" fill="transparent"><title>원작 · 좀비 35~40천 (9초): 32 ms</title></circle>
-<circle cx="268.8" cy="280.1" r="10" fill="transparent"><title>원작 · 좀비 40~45천 (14초): 31 ms</title></circle>
-<circle cx="292.9" cy="280.3" r="10" fill="transparent"><title>원작 · 좀비 45~50천 (20초): 31 ms</title></circle>
-<circle cx="317.0" cy="279.7" r="10" fill="transparent"><title>원작 · 좀비 50~55천 (23초): 32 ms</title></circle>
-<circle cx="341.1" cy="275.5" r="10" fill="transparent"><title>원작 · 좀비 55~60천 (29초): 34 ms</title></circle>
-<circle cx="365.2" cy="270.4" r="10" fill="transparent"><title>원작 · 좀비 60~65천 (34초): 38 ms</title></circle>
-<circle cx="389.3" cy="265.3" r="10" fill="transparent"><title>원작 · 좀비 65~70천 (43초): 41 ms</title></circle>
-<circle cx="413.4" cy="260.0" r="10" fill="transparent"><title>원작 · 좀비 70~75천 (45초): 45 ms</title></circle>
-<path class="s-chipmunk" d="M148.3,276.4 L172.4,279.4 L196.5,280.2 L220.6,279.8 L244.7,280.4 L268.8,280.3 L292.9,275.2 L317.0,267.4 L341.1,255.3 L365.2,242.5 L389.3,231.6 L413.4,220.2 L437.5,211.2 L461.6,195.9 L485.7,183.3 L509.8,168.6 L533.9,153.5 L558.0,121.5" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="148.3" cy="276.4" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 15~20천 (3초): 34 ms</title></circle>
-<circle cx="172.4" cy="279.4" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 20~25천 (4초): 32 ms</title></circle>
-<circle cx="196.5" cy="280.2" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 25~30천 (5초): 31 ms</title></circle>
-<circle cx="220.6" cy="279.8" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 30~35천 (5초): 32 ms</title></circle>
-<circle cx="244.7" cy="280.4" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 35~40천 (5초): 31 ms</title></circle>
-<circle cx="268.8" cy="280.3" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 40~45천 (6초): 31 ms</title></circle>
-<circle cx="292.9" cy="275.2" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 45~50천 (6초): 35 ms</title></circle>
-<circle cx="317.0" cy="267.4" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 50~55천 (6초): 40 ms</title></circle>
-<circle cx="341.1" cy="255.3" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 55~60천 (7초): 48 ms</title></circle>
-<circle cx="365.2" cy="242.5" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 60~65천 (6초): 56 ms</title></circle>
-<circle cx="389.3" cy="231.6" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 65~70천 (7초): 63 ms</title></circle>
-<circle cx="413.4" cy="220.2" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 70~75천 (7초): 71 ms</title></circle>
-<circle cx="437.5" cy="211.2" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 75~80천 (8초): 77 ms</title></circle>
-<circle cx="461.6" cy="195.9" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 80~85천 (9초): 87 ms</title></circle>
-<circle cx="485.7" cy="183.3" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 85~90천 (11초): 95 ms</title></circle>
-<circle cx="509.8" cy="168.6" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 90~95천 (12초): 105 ms</title></circle>
-<circle cx="533.9" cy="153.5" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 95~100천 (13초): 114 ms</title></circle>
-<circle cx="558.0" cy="121.5" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 100~105천 (109초): 135 ms</title></circle>
-<path class="s-rapier" d="M148.3,277.8 L172.4,279.3 L196.5,280.5 L220.6,280.3 L244.7,278.3 L268.8,269.5 L292.9,257.2 L317.0,246.7 L341.1,233.8 L365.2,222.1 L389.3,212.2 L413.4,206.1 L437.5,195.2 L461.6,183.2 L485.7,178.9 L509.8,171.0 L533.9,162.0 L558.0,158.0" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="148.3" cy="277.8" r="10" fill="transparent"><title>Rapier · 좀비 15~20천 (3초): 33 ms</title></circle>
-<circle cx="172.4" cy="279.3" r="10" fill="transparent"><title>Rapier · 좀비 20~25천 (4초): 32 ms</title></circle>
-<circle cx="196.5" cy="280.5" r="10" fill="transparent"><title>Rapier · 좀비 25~30천 (5초): 31 ms</title></circle>
-<circle cx="220.6" cy="280.3" r="10" fill="transparent"><title>Rapier · 좀비 30~35천 (5초): 31 ms</title></circle>
-<circle cx="244.7" cy="278.3" r="10" fill="transparent"><title>Rapier · 좀비 35~40천 (5초): 33 ms</title></circle>
-<circle cx="268.8" cy="269.5" r="10" fill="transparent"><title>Rapier · 좀비 40~45천 (6초): 38 ms</title></circle>
-<circle cx="292.9" cy="257.2" r="10" fill="transparent"><title>Rapier · 좀비 45~50천 (6초): 46 ms</title></circle>
-<circle cx="317.0" cy="246.7" r="10" fill="transparent"><title>Rapier · 좀비 50~55천 (7초): 53 ms</title></circle>
-<circle cx="341.1" cy="233.8" r="10" fill="transparent"><title>Rapier · 좀비 55~60천 (6초): 62 ms</title></circle>
-<circle cx="365.2" cy="222.1" r="10" fill="transparent"><title>Rapier · 좀비 60~65천 (6초): 69 ms</title></circle>
-<circle cx="389.3" cy="212.2" r="10" fill="transparent"><title>Rapier · 좀비 65~70천 (7초): 76 ms</title></circle>
-<circle cx="413.4" cy="206.1" r="10" fill="transparent"><title>Rapier · 좀비 70~75천 (8초): 80 ms</title></circle>
-<circle cx="437.5" cy="195.2" r="10" fill="transparent"><title>Rapier · 좀비 75~80천 (8초): 87 ms</title></circle>
-<circle cx="461.6" cy="183.2" r="10" fill="transparent"><title>Rapier · 좀비 80~85천 (9초): 95 ms</title></circle>
-<circle cx="485.7" cy="178.9" r="10" fill="transparent"><title>Rapier · 좀비 85~90천 (11초): 98 ms</title></circle>
-<circle cx="509.8" cy="171.0" r="10" fill="transparent"><title>Rapier · 좀비 90~95천 (11초): 103 ms</title></circle>
-<circle cx="533.9" cy="162.0" r="10" fill="transparent"><title>Rapier · 좀비 95~100천 (12초): 109 ms</title></circle>
-<circle cx="558.0" cy="158.0" r="10" fill="transparent"><title>Rapier · 좀비 100~105천 (111초): 111 ms</title></circle>
-<circle class="f-chipmunk ring" cx="558.0" cy="121.5" r="4.5" stroke-width="2"/>
-<line class="s-chipmunk" x1="564.0" y1="121.5" x2="580" y2="121.5" stroke-width="1"/>
-<text class="t1" x="584" y="119.5" font-size="12" font-weight="600">Chipmunk 다중 코어</text>
-<text class="t2" x="584" y="134.5" font-size="11">135 ms</text>
-<circle class="f-rapier ring" cx="558.0" cy="158.0" r="4.5" stroke-width="2"/>
-<line class="s-rapier" x1="564.0" y1="158.0" x2="580" y2="158.0" stroke-width="1"/>
-<text class="t1" x="584" y="156.0" font-size="12" font-weight="600">Rapier</text>
-<text class="t2" x="584" y="171.0" font-size="11">111 ms</text>
-<circle class="f-original ring" cx="413.4" cy="260.0" r="4.5" stroke-width="2"/>
-<text class="t1" x="423.38095238095235" y="258.0" font-size="12" font-weight="600">원작</text>
-<text class="t2" x="423.38095238095235" y="273.0" font-size="11">45 ms</text>
+<path class="s-original" d="M195.0,261.3 L232.4,262.6 L269.9,263.8 L307.3,264.3 L344.7,263.8 L382.1,264.0 L419.6,264.2 L457.0,263.7 L494.4,259.8 L531.9,255.1 L569.3,250.5 L606.7,245.6" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="195.0" cy="261.3" r="10" fill="transparent"><title>원작 · 좀비 15~20천 (3초): 33 ms</title></circle>
+<circle cx="232.4" cy="262.6" r="10" fill="transparent"><title>원작 · 좀비 20~25천 (4초): 32 ms</title></circle>
+<circle cx="269.9" cy="263.8" r="10" fill="transparent"><title>원작 · 좀비 25~30천 (5초): 32 ms</title></circle>
+<circle cx="307.3" cy="264.3" r="10" fill="transparent"><title>원작 · 좀비 30~35천 (7초): 31 ms</title></circle>
+<circle cx="344.7" cy="263.8" r="10" fill="transparent"><title>원작 · 좀비 35~40천 (9초): 32 ms</title></circle>
+<circle cx="382.1" cy="264.0" r="10" fill="transparent"><title>원작 · 좀비 40~45천 (14초): 31 ms</title></circle>
+<circle cx="419.6" cy="264.2" r="10" fill="transparent"><title>원작 · 좀비 45~50천 (20초): 31 ms</title></circle>
+<circle cx="457.0" cy="263.7" r="10" fill="transparent"><title>원작 · 좀비 50~55천 (23초): 32 ms</title></circle>
+<circle cx="494.4" cy="259.8" r="10" fill="transparent"><title>원작 · 좀비 55~60천 (29초): 34 ms</title></circle>
+<circle cx="531.9" cy="255.1" r="10" fill="transparent"><title>원작 · 좀비 60~65천 (34초): 38 ms</title></circle>
+<circle cx="569.3" cy="250.5" r="10" fill="transparent"><title>원작 · 좀비 65~70천 (43초): 41 ms</title></circle>
+<circle cx="606.7" cy="245.6" r="10" fill="transparent"><title>원작 · 좀비 70~75천 (45초): 45 ms</title></circle>
+<path class="s-chipmunk" d="M195.0,260.6 L232.4,263.4 L269.9,264.2 L307.3,263.7 L344.7,264.3 L382.1,264.2 L419.6,259.5 L457.0,252.3 L494.4,241.3 L531.9,229.5 L569.3,219.5 L606.7,209.0 L644.1,200.8 L681.6,186.8 L719.0,175.1 L756.4,161.7 L793.9,147.8 L831.3,118.4" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="195.0" cy="260.6" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 15~20천 (3초): 34 ms</title></circle>
+<circle cx="232.4" cy="263.4" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 20~25천 (4초): 32 ms</title></circle>
+<circle cx="269.9" cy="264.2" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 25~30천 (5초): 31 ms</title></circle>
+<circle cx="307.3" cy="263.7" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 30~35천 (5초): 32 ms</title></circle>
+<circle cx="344.7" cy="264.3" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 35~40천 (5초): 31 ms</title></circle>
+<circle cx="382.1" cy="264.2" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 40~45천 (6초): 31 ms</title></circle>
+<circle cx="419.6" cy="259.5" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 45~50천 (6초): 35 ms</title></circle>
+<circle cx="457.0" cy="252.3" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 50~55천 (6초): 40 ms</title></circle>
+<circle cx="494.4" cy="241.3" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 55~60천 (7초): 48 ms</title></circle>
+<circle cx="531.9" cy="229.5" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 60~65천 (6초): 56 ms</title></circle>
+<circle cx="569.3" cy="219.5" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 65~70천 (7초): 63 ms</title></circle>
+<circle cx="606.7" cy="209.0" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 70~75천 (7초): 71 ms</title></circle>
+<circle cx="644.1" cy="200.8" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 75~80천 (8초): 77 ms</title></circle>
+<circle cx="681.6" cy="186.8" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 80~85천 (9초): 87 ms</title></circle>
+<circle cx="719.0" cy="175.1" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 85~90천 (11초): 95 ms</title></circle>
+<circle cx="756.4" cy="161.7" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 90~95천 (12초): 105 ms</title></circle>
+<circle cx="793.9" cy="147.8" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 95~100천 (13초): 114 ms</title></circle>
+<circle cx="831.3" cy="118.4" r="10" fill="transparent"><title>Chipmunk 다중 코어 · 좀비 100~105천 (109초): 135 ms</title></circle>
+<path class="s-rapier" d="M195.0,261.9 L232.4,263.3 L269.9,264.4 L307.3,264.2 L344.7,262.4 L382.1,254.3 L419.6,243.0 L457.0,233.4 L494.4,221.5 L531.9,210.8 L569.3,201.7 L606.7,196.1 L644.1,186.1 L681.6,175.1 L719.0,171.1 L756.4,163.9 L793.9,155.6 L831.3,151.9" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="195.0" cy="261.9" r="10" fill="transparent"><title>Rapier · 좀비 15~20천 (3초): 33 ms</title></circle>
+<circle cx="232.4" cy="263.3" r="10" fill="transparent"><title>Rapier · 좀비 20~25천 (4초): 32 ms</title></circle>
+<circle cx="269.9" cy="264.4" r="10" fill="transparent"><title>Rapier · 좀비 25~30천 (5초): 31 ms</title></circle>
+<circle cx="307.3" cy="264.2" r="10" fill="transparent"><title>Rapier · 좀비 30~35천 (5초): 31 ms</title></circle>
+<circle cx="344.7" cy="262.4" r="10" fill="transparent"><title>Rapier · 좀비 35~40천 (5초): 33 ms</title></circle>
+<circle cx="382.1" cy="254.3" r="10" fill="transparent"><title>Rapier · 좀비 40~45천 (6초): 38 ms</title></circle>
+<circle cx="419.6" cy="243.0" r="10" fill="transparent"><title>Rapier · 좀비 45~50천 (6초): 46 ms</title></circle>
+<circle cx="457.0" cy="233.4" r="10" fill="transparent"><title>Rapier · 좀비 50~55천 (7초): 53 ms</title></circle>
+<circle cx="494.4" cy="221.5" r="10" fill="transparent"><title>Rapier · 좀비 55~60천 (6초): 62 ms</title></circle>
+<circle cx="531.9" cy="210.8" r="10" fill="transparent"><title>Rapier · 좀비 60~65천 (6초): 69 ms</title></circle>
+<circle cx="569.3" cy="201.7" r="10" fill="transparent"><title>Rapier · 좀비 65~70천 (7초): 76 ms</title></circle>
+<circle cx="606.7" cy="196.1" r="10" fill="transparent"><title>Rapier · 좀비 70~75천 (8초): 80 ms</title></circle>
+<circle cx="644.1" cy="186.1" r="10" fill="transparent"><title>Rapier · 좀비 75~80천 (8초): 87 ms</title></circle>
+<circle cx="681.6" cy="175.1" r="10" fill="transparent"><title>Rapier · 좀비 80~85천 (9초): 95 ms</title></circle>
+<circle cx="719.0" cy="171.1" r="10" fill="transparent"><title>Rapier · 좀비 85~90천 (11초): 98 ms</title></circle>
+<circle cx="756.4" cy="163.9" r="10" fill="transparent"><title>Rapier · 좀비 90~95천 (11초): 103 ms</title></circle>
+<circle cx="793.9" cy="155.6" r="10" fill="transparent"><title>Rapier · 좀비 95~100천 (12초): 109 ms</title></circle>
+<circle cx="831.3" cy="151.9" r="10" fill="transparent"><title>Rapier · 좀비 100~105천 (111초): 111 ms</title></circle>
+<circle class="f-chipmunk ring" cx="831.3" cy="118.4" r="4.5" stroke-width="2"/>
+<line class="s-chipmunk" x1="837.3" y1="118.4" x2="860" y2="118.4" stroke-width="1"/>
+<text class="t1" x="864" y="116.4" font-size="12" font-weight="600">Chipmunk 다중 코어</text>
+<text class="t2" x="864" y="131.4" font-size="11">135 ms</text>
+<circle class="f-rapier ring" cx="831.3" cy="151.9" r="4.5" stroke-width="2"/>
+<line class="s-rapier" x1="837.3" y1="151.9" x2="860" y2="151.9" stroke-width="1"/>
+<text class="t1" x="864" y="149.9" font-size="12" font-weight="600">Rapier</text>
+<text class="t2" x="864" y="164.9" font-size="11">111 ms</text>
+<circle class="f-original ring" cx="606.7" cy="245.6" r="4.5" stroke-width="2"/>
+<text class="t1" x="616.7142857142857" y="243.6" font-size="12" font-weight="600">원작</text>
+<text class="t2" x="616.7142857142857" y="258.6" font-size="11">45 ms</text>
 </svg>

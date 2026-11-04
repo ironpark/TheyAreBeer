@@ -10,7 +10,7 @@ ENGINES = [('original', '원작'), ('chipmunk', 'Chipmunk 다중 코어'), ('rap
 COLOR = {'original': ('#2a78d6', '#3987e5'), 'chipmunk': ('#eb6834', '#d95926'), 'rapier': ('#1baf7a', '#199e70'),
          'd3d9': ('#898781', '#898781'), 'dxvk': ('#2a78d6', '#3987e5')}
 FONT = 'system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif'
-W, H = 720, 380
+W, H = 1000, 360
 ML, MR, MT, MB = 64, 150, 84, 52   # right margin holds the direct labels
 
 

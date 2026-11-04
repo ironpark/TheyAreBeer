@@ -141,6 +141,20 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `n_settype_per_s`, `n_settype_us` | 몸체 타입 변경 수, 한 번의 시간(µs) |
 | `n_insert_us`, `n_collider_us` | 생성 한 번의 Rapier 몸체 삽입·충돌체 삽입 시간(µs) |
 | `n_indexwait_ms` | 그 1초 동안 질의 인덱스 락을 기다린 시간(ms) |
+| `n_angle_per_s`, `n_angle_ms`, `n_size_*`, `n_dispose_*`, `n_sensor_*` | `Body_SetAngle`·`SetSize`·`Dispose`·`AddSensor` 호출 수와 합계 시간(ms, 단계가 잡은 월드 락 대기 포함) |
+| `n_pending` | 인덱스를 다시 만들 때 대기 목록에 있던 충돌체 수(평균) |
+| `n_ray_diff`, `n_ray_tie` | `DX_RAPIER_RAYWALK=2`일 때 광선 걷기와 상자 걷기의 첫 충돌이 다른 거리에서 / 같은 거리에서 다른 몸체로 갈린 수 |
+| `n_catset` | 몸체 카테고리가 바뀐 수 |
+
+### 공간 질의 (`q_*`)
+
+종류(`area` 영역, `radius` 반경, `fast` 반경 배열, `near` 가장 가까운 몸체, `ray` 레이캐스트, `space` 남은 공간)마다 그 1초 기준입니다(Rapier 판만). 이 열과 `n_angle_*`~`n_sensor_*`는 질의·호출마다 시계를 읽어서 평소에는 꺼져 있고, 벤치를 돌릴 때만 켜집니다(`DX_SetOption(356, 1)`).
+
+| 열 | 뜻 |
+| --- | --- |
+| `q_<종류>_per_s`, `q_<종류>_ms` | 호출 수, 합계 시간(ms, 모든 스레드 합) |
+| `q_<종류>_lock_ms`, `q_<종류>_cb_ms` | 그중 인덱스 락 대기, 게임 콜백 시간(ms) |
+| `q_<종류>_cand`, `q_<종류>_hits` | 한 번에 살펴본 인덱스 항목 수, 상자·마스크를 통과한 수 |
 
 ### 로직 갱신 (`l_*`)
 
@@ -166,6 +180,7 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `DX_RAPIER_ADAPT_MIN`, `DX_RAPIER_ADAPT_MAX` | 자동 조절 범위(기본 5~20) |
 | `DX_RAPIER_COUNTERS` | `1`이면 내부 구간 시간(`-Counters`와 같음) |
 | `DX_RAPIER_CCD` | `0`이면 연속 충돌 검사 끔 |
+| `DX_RAPIER_RAYWALK` | `0`이면 레이캐스트를 예전처럼 선분 상자 전체로 찾음, `2`면 두 방식을 함께 돌려 결과 차이를 셈(`n_ray_*`) |
 | `DX_RAPIER_SOFTCCD` | soft CCD 거리(기본 0, 끔) |
 | `DX_RAPIER_CCD_SPLIT`, `DX_RAPIER_CCD_HARDCAT` | 좀비만 bullet CCD, 나머지 soft CCD(기본 끔) |
 | `DX_RAPIER_SLEEP`, `DX_RAPIER_BATCH`, `DX_RAPIER_SOFTNESS` | `0`이면 잠자기·일괄 쓰기·접촉 강성 조정 끔 |

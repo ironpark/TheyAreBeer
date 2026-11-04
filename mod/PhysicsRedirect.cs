@@ -45,6 +45,12 @@ namespace Billions
 
         [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
         [DllImport("kernel32", CharSet = CharSet.Ansi)] static extern IntPtr GetProcAddress(IntPtr module, string name);
+        // An export of the replacement DLL as a delegate, or null (game's DLL, or no such export).
+        internal static T Proc<T>(string name) where T : class
+        {
+            IntPtr p = Module != IntPtr.Zero ? GetProcAddress(Module, name) : IntPtr.Zero;
+            return p != IntPtr.Zero ? Marshal.GetDelegateForFunctionPointer(p, typeof(T)) as T : null;
+        }
         const uint LOAD_WITH_ALTERED_SEARCH_PATH = 8;   // the DLL's own folder is searched for its dependencies (rapier2d_ffi.dll)
 
         public static bool Install(Harmony h, string dll)

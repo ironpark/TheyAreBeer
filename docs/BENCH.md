@@ -146,6 +146,17 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `n_ray_diff`, `n_ray_tie` | `DX_RAPIER_RAYWALK=2`일 때 광선 걷기와 상자 걷기의 첫 충돌이 다른 거리에서 / 같은 거리에서 다른 몸체로 갈린 수 |
 | `n_catset` | 몸체 카테고리가 바뀐 수 |
 
+### 병렬 솔버 (`s_*`)
+
+`RAPIER_SOLVER_DIAG=1`로 돌릴 때만 값이 있습니다(Rapier 판, `rapier-solver-stats.patch`가 들어간 Rapier 라이브러리).
+
+| 열 | 뜻 |
+| --- | --- |
+| `s_wait_ms`, `s_run_ms` | 그 1초 동안 모든 작업 스레드가 장벽에서 기다린 시간, 솔버를 돈 시간 합계(ms) |
+| `s_waits` | 장벽을 지난 수(작업 스레드마다 셈) |
+| `s_overflow_ms` | 작업 스레드 0이 혼자 푼 넘침 제약 시간(ms) |
+| `s_colors`, `s_overflow_chunks`, `s_chunks`, `s_workers` | 풀이 한 번의 색 수, 넘침 묶음 수, 묶음 수, 작업 스레드 수(평균) |
+
 ### 공간 질의 (`q_*`)
 
 종류(`area` 영역, `radius` 반경, `fast` 반경 배열, `near` 가장 가까운 몸체, `ray` 레이캐스트, `space` 남은 공간)마다 그 1초 기준입니다(Rapier 판만). 이 열과 `n_angle_*`~`n_sensor_*`는 질의·호출마다 시계를 읽어서 평소에는 꺼져 있고, 벤치를 돌릴 때만 켜집니다(`DX_SetOption(356, 1)`).
@@ -180,6 +191,8 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `DX_RAPIER_ADAPT_MIN`, `DX_RAPIER_ADAPT_MAX` | 자동 조절 범위(기본 5~20) |
 | `DX_RAPIER_COUNTERS` | `1`이면 내부 구간 시간(`-Counters`와 같음) |
 | `DX_RAPIER_CCD` | `0`이면 연속 충돌 검사 끔 |
+| `RAPIER_BODY_SORT`, `RAPIER_CONTACT_SORT` | 솔버 몸체 Morton 정렬 주기(기본 16), 색 안 접촉 정렬(기본 1). `0`이면 끔 |
+| `RAPIER_SOLVER_DIAG` | 있으면 병렬 솔버 진단을 기록(`s_*` 열) |
 | `DX_RAPIER_RAYSIMD` | `0`이면 레이캐스트 후보 검사에 AVX2를 쓰지 않음 |
 | `DX_RAPIER_RAYWALK` | `0`이면 레이캐스트를 예전처럼 선분 상자 전체로 찾음, `2`면 두 방식을 함께 돌려 결과 차이를 셈(`n_ray_*`) |
 | `DX_RAPIER_SOFTCCD` | soft CCD 거리(기본 0, 끔) |

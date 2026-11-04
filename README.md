@@ -94,6 +94,8 @@ Rapier 빌드는 Rapier의 공식 C 바인딩을 [공식 문서](https://rapier.
 2. `native\rapier\*.patch`를 받은 소스에 적용합니다. 패치 목록이나 내용이 바뀌면 소스를 고정 커밋 상태로 되돌린 뒤 모두 다시 적용합니다.
    - `rapier-c-batch-write.patch`: 여러 몸체의 위치·속도를 한 번의 호출로 쓰는 `r2RigidBody_WriteStates`를 C 바인딩에 더합니다(공식 바인딩은 몸체·값마다 호출해야 하고, 호출마다 세계 잠금과 오류 처리를 거칩니다).
    - `rapier-solver-park.patch`: 병렬 솔버의 작업 스레드가 단계를 기다릴 때 `RAPIER_SYNC_SPIN`번 돈 뒤 잠들게 합니다(래퍼 기본 2000). 게임의 로직·그리기 스레드에 코어를 돌려줍니다.
+   - `rapier-solver-stats.patch`: 병렬 솔버의 장벽 대기·넘침 처리 시간과 색 수를 셉니다(`RAPIER_SOLVER_DIAG`가 있을 때만).
+   - `rapier-solver-zorder.patch`: 솔버 몸체를 위치의 Morton 순서로(16단계마다), 색 안의 접촉을 몸체 순서로 정렬해 캐시 적중을 높입니다(래퍼 기본 켬, `RAPIER_BODY_SORT=0`·`RAPIER_CONTACT_SORT=0`으로 끔).
    - `rapier-c-step-counters.patch`: 마지막 단계의 Rapier 내부 구간 시간(넓은 범위·좁은 범위 충돌 검사, 섬 제약 수집, 솔버 등)과 접촉 수를 한 번에 읽는 `r2StepCounters`를 더합니다. Rapier의 `profiler` 기능으로 빌드하며, 카운터는 켤 때만 잽니다.
 3. 필요한 Rust 버전(1.99.1)이 없으면 설치합니다.
 4. `-DRAPIER_DIMENSION=2 -DRAPIER_PRECISION=32 -DRAPIER_ENABLE_PARALLEL=ON -DRAPIER_SIMD_LANES=8 -DRAPIER_FEATURES=profiler`로 세 번 빌드하고 CMake 통합 테스트를 돌립니다. 모든 x64 CPU용, AVX2·FMA용(Rust `+avx2,+fma`), AVX-512용(여기에 `+avx512f,+avx512vl,+avx512bw,+avx512dq,+avx512cd`)이며 모두 8레인 솔버입니다. Rust 쪽은 fat LTO·코드 생성 단위 1개로 빌드합니다(Cargo 환경 변수 `CARGO_PROFILE_RELEASE_LTO=fat`). 빌드 PC가 그 명령어를 지원하지 않으면 그 빌드의 테스트는 건너뜁니다.

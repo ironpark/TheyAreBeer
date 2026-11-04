@@ -358,10 +358,10 @@ int main(int argc, char **argv)
 	write_cfg();
 	Api A, B; if (!load(&A, argv[1], "원작") || !load(&B, argv[2], "대체")) return 2;
 
+	int (*optB)(int, int) = (int (*)(int, int))GetProcAddress(B.h, "DX_SetOption");
 	{
-		int (*opt)(int, int) = (int (*)(int, int))GetProcAddress(B.h, "DX_SetOption");
 		const char *o = getenv("COMPARE_OPTS");
-		if (opt && o) { char buf[256]; strncpy(buf, o, 255); buf[255] = 0; for (char *t = strtok(buf, ","); t; t = strtok(NULL, ",")) { int k, v; if (sscanf(t, "%d=%d", &k, &v) == 2) { opt(k, v); printf("대체본 스위치 %d = %d\n", k, v); } } }
+		if (optB && o) { char buf[256]; strncpy(buf, o, 255); buf[255] = 0; for (char *t = strtok(buf, ","); t; t = strtok(NULL, ",")) { int k, v; if (sscanf(t, "%d=%d", &k, &v) == 2) { optB(k, v); printf("대체본 스위치 %d = %d\n", k, v); } } }
 	}
 	int s0 = 0, s1 = 2; if (argc > 3 && strcmp(argv[3], "all")) s0 = s1 = atoi(argv[3]);
 	int n = argc > 4 ? atoi(argv[4]) : 300, steps = argc > 5 ? atoi(argv[5]) : 300, ok = 1;
@@ -370,10 +370,13 @@ int main(int argc, char **argv)
 	{
 		Trace ta = {0}, tb = {0};
 		LARGE_INTEGER f, t0, t1, t2; QueryPerformanceFrequency(&f);
-		QueryPerformanceCounter(&t0); run(&A, s, n, steps, &ta); QueryPerformanceCounter(&t1); run(&B, s, n, steps, &tb); QueryPerformanceCounter(&t2);
+		QueryPerformanceCounter(&t0); run(&A, s, n, steps, &ta); QueryPerformanceCounter(&t1); if (optB) optB(399, 0); run(&B, s, n, steps, &tb); QueryPerformanceCounter(&t2);
 		char label[64]; sprintf(label, "장면 %d (몸체 %d, 단계 %d)", s, n, steps);
 		ok &= compare(label, &ta, &tb);
 		printf("   시간 원작 %.1f ms · 대체 %.1f ms\n", (t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart, (t2.QuadPart - t1.QuadPart) * 1000.0 / f.QuadPart);
+		/* Rapier backend: step section times (DX_SetOption 300..305). */
+		int k = optB ? optB(305, 0) : 0;
+		if (k > 0) printf("   대체 단계 구간(ms/단계): 넣기 %.2f · r2Step %.2f · 가져오기 %.2f · 접촉 쌍 %.2f · 질의 인덱스 %.2f\n", optB(300, 0) / 1000.0 / k, optB(301, 0) / 1000.0 / k, optB(302, 0) / 1000.0 / k, optB(303, 0) / 1000.0 / k, optB(304, 0) / 1000.0 / k);
 		free(ta.v); free(ta.tag); free(tb.v); free(tb.tag);
 	}
 	return ok ? 0 : 1;

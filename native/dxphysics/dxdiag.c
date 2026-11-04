@@ -127,7 +127,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 #define DX_N256 DX_N64 DX_N64 DX_N64 DX_N64
 #define DX_N1K DX_N256 DX_N256 DX_N256 DX_N256
 // The loader patches 5 bytes at DLL base + 0x13B3; this pad must stay at the very start of .text.
-// /INCLUDE keeps it even if dx_keep_pad were optimised away (/Gw, /GL); scripts/build-native.ps1 checks its placement in the map file.
+// /INCLUDE keeps it even if dx_keep_pad were optimised away (/Gw, /GL); scripts/build.ps1 checks its placement in the map file.
 #pragma comment(linker, "/INCLUDE:dx_text_pad")
 #pragma code_seg(".text$a00")
 __declspec(noinline) void dx_text_pad(void) { DX_N1K DX_N1K DX_N1K DX_N1K DX_N1K DX_N1K DX_N1K DX_N1K __debugbreak(); }

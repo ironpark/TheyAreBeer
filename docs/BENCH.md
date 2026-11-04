@@ -180,6 +180,7 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `DX_RAPIER_ADAPT_MIN`, `DX_RAPIER_ADAPT_MAX` | 자동 조절 범위(기본 5~20) |
 | `DX_RAPIER_COUNTERS` | `1`이면 내부 구간 시간(`-Counters`와 같음) |
 | `DX_RAPIER_CCD` | `0`이면 연속 충돌 검사 끔 |
+| `DX_RAPIER_RAYSIMD` | `0`이면 레이캐스트 후보 검사에 AVX2를 쓰지 않음 |
 | `DX_RAPIER_RAYWALK` | `0`이면 레이캐스트를 예전처럼 선분 상자 전체로 찾음, `2`면 두 방식을 함께 돌려 결과 차이를 셈(`n_ray_*`) |
 | `DX_RAPIER_SOFTCCD` | soft CCD 거리(기본 0, 끔) |
 | `DX_RAPIER_CCD_SPLIT`, `DX_RAPIER_CCD_HARDCAT` | 좀비만 bullet CCD, 나머지 soft CCD(기본 끔) |

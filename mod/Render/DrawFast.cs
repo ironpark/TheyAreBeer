@@ -27,6 +27,9 @@ namespace Billions
     // there: refresh the sampler's time, append the six vertices to the batch, and update the batch state. Everything
     // else, and anything unexpected, goes to the original. TABPERF_FASTDRAW_CHECK=1 computes the fast result, lets the
     // original draw, and compares the vertex bytes and the batch state (log).
+    //
+    // With SceneDraw (the draw pass replaced) neither DrawScene nor DXScene.DrawObject runs: SceneDraw removes its own
+    // objects and calls Draw for every sprite, so only the fast path is set up here.
     public static unsafe class DrawFast
     {
         public static bool On { get; private set; }
@@ -34,7 +37,7 @@ namespace Billions
 
         public static void Install(Harmony h)
         {
-            InstallRemove(h);
+            if (!SceneDraw.Installed) InstallRemove(h);
             InstallSprites(h);
         }
 
@@ -104,6 +107,7 @@ namespace Billions
                     rPending = Get<int>(_rt, Renderer.Pending); rLast = Get<object>(_rt, Renderer.LastDrawn); rVerts = Get<object>(_rt, Renderer.Vertices);
                     _scratch = Array.CreateInstance(vt, 6);
                 }
+                if (SceneDraw.Installed) { On = true; Log.Info("fast draw: 그리기 패스 교체(SceneDraw)가 스프라이트마다 부름" + (Check ? " — 검사 모드" : "")); return; }
                 var dobj = AccessTools.Method(typeof(DXScene), "DrawObject", new[] { typeof(DXObject) });
                 h.Patch(dobj, null, null, new HarmonyMethod(typeof(DrawFast), nameof(DrawTranspiler)));
                 On = _drawSites > 0;
@@ -247,9 +251,32 @@ namespace Billions
                 typeof(DrawFast).GetMethod(nameof(Draw), BindingFlags.Static | BindingFlags.Public), out _drawSites);
         }
 
+        // measuring (the benchmark turns it on): sprites by path, the time of the renderer's own DrawObject, and a sample of
+        // what the sprites that miss the fast path are
+        public static volatile bool Measure;
+        public static long NFast, NSlow, SlowTicks;
+        public static readonly Dictionary<string, long> SlowKinds = new Dictionary<string, long>();
+
         public static void Draw(IDXRenderer r, DXObject o)
         {
             if (!On || r == null || o == null || r.GetType() != _rt || !DeviceCheck.SceneOk) { r.DrawObject(o); return; }
+            if (Measure)
+            {
+                if (TryFast(r, o, null)) { NFast++; return; }
+                long t = System.Diagnostics.Stopwatch.GetTimestamp();
+                r.DrawObject(o);
+                SlowTicks += System.Diagnostics.Stopwatch.GetTimestamp() - t;
+                if (++NSlow % 97 == 0)
+                {
+                    var img = o._State._Image; object tex = img != null ? img.GPUTexture : null;
+                    string texName = tex != null ? tex.GetType().Name : "null";
+                    string k = o.GetType().Name + (o._ShaderEffect != null ? " fx:" + o._ShaderEffect.GetType().Name : "") + (o._MaskImage != null ? " mask" : "")
+                        + (o._State._ImageStyle != 0 ? " style:" + o._State._ImageStyle : "") + (o._BlendMode != DXObject.TBlendMode.Normal ? " blend:" + o._BlendMode : "")
+                        + (img != null && texName != "Texture" ? " tex:" + texName : "");
+                    long c; SlowKinds.TryGetValue(k, out c); SlowKinds[k] = c + 1;
+                }
+                return;
+            }
             if (!Check) { if (!TryFast(r, o, null)) r.DrawObject(o); return; }
             int before = rPending(r);
             bool ok = TryFast(r, o, _scratch);

@@ -16,6 +16,11 @@ namespace Billions
         public static bool Deferred { get { return _deferred; } }
         static readonly HashSet<DXObject> _dirty = new HashSet<DXObject>();
         static readonly object _lock = new object();
+        // the parent this thread last put into _dirty, valid while _epoch is unchanged (each clear of _dirty bumps it): the
+        // children of one parent (the world's objects) change Z one after another, so most changes skip the lock
+        [ThreadStatic] static DXObject _lastDirty;
+        [ThreadStatic] static int _lastEpoch;
+        static volatile int _epoch;
         static DXObject[] _items = new DXObject[0];
 
         static readonly AccessTools.FieldRef<DXObject, DXObject> _parent = AccessTools.FieldRefAccess<DXObject, DXObject>("_Parent");
@@ -41,10 +46,13 @@ namespace Billions
             var p = _parent(__instance); if (p == null) return true;
             var ch = _children(p); if (ch == null || ch.Count < MinChildren) return true;
             if (_z(__instance) == value) return !_deferred;
-            System.Threading.Interlocked.Increment(ref _changes);
+            if (System.Threading.Volatile.Read(ref _changes) < HighWater) System.Threading.Interlocked.Increment(ref _changes);   // Frame() only compares with HighWater / LowWater
             if (!_deferred) return true;
             _z(__instance) = Math.Min(value, 2147483637);
-            lock (_lock) _dirty.Add(p);
+            if (!ReferenceEquals(p, _lastDirty) || _lastEpoch != _epoch)
+            {
+                lock (_lock) { _dirty.Add(p); _lastDirty = p; _lastEpoch = _epoch; }
+            }
             return false;
         }
 
@@ -55,7 +63,7 @@ namespace Billions
             if (!_deferred)
             {
                 if (_finalSort) { _finalSort = false; SortDirty(); }
-                if (Enabled && ch >= HighWater) { if (++_highFrames >= 2) { _deferred = true; _since = 0; _lowFrames = 0; Period = 1; Switches++; Log.Info("zsort: 몰아서 정렬로(Z 변경 " + ch + "/프레임)"); } }
+                if (Enabled && ch >= HighWater) { if (++_highFrames >= 2) { _deferred = true; _since = 0; _lowFrames = 0; Period = 1; Switches++; Log.Info("zsort: 몰아서 정렬로(Z 변경 " + ch + "+/프레임)"); } }
                 else _highFrames = 0;
                 return;
             }
@@ -75,7 +83,7 @@ namespace Billions
         static void SortDirty()
         {
             DXObject[] ps;
-            lock (_lock) { if (_dirty.Count == 0) return; ps = new DXObject[_dirty.Count]; _dirty.CopyTo(ps); _dirty.Clear(); }
+            lock (_lock) { if (_dirty.Count == 0) return; ps = new DXObject[_dirty.Count]; _dirty.CopyTo(ps); _dirty.Clear(); _epoch++; }
             var sw = System.Diagnostics.Stopwatch.StartNew(); int total = 0;
             foreach (var p in ps)
             {
@@ -107,7 +115,7 @@ namespace Billions
         {
             _deferred = false; _finalSort = false; _highFrames = 0; _lowFrames = 0; _since = 0; Period = 1;
             System.Threading.Interlocked.Exchange(ref _changes, 0);
-            lock (_lock) _dirty.Clear();
+            lock (_lock) { _dirty.Clear(); _epoch++; }
             Array.Clear(_items, 0, _items.Length);
         }
     }

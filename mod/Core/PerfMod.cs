@@ -81,6 +81,7 @@ namespace Billions
             Step("최적화 옵션 탭", () => { LifeMarkers.Install(h); GameOptions.Install(h); });
             Step("웨이브 미니맵 표시", () => SwarmFast.Install(h));
             Step("D3D 장치 확인", () => DeviceCheck.Install(h));
+            Step("그리기 패스 교체", () => SceneDraw.Install(h));   // first: DrawFast leaves DrawScene / DrawObject alone when it is in
             Step("그리기 빠른 길", () => DrawFast.Install(h));
             Step("프레임 훅", () => PerfHooks.Install(h));
             Step("성능 시험 모드", () => Bench.Install(h));
@@ -89,6 +90,7 @@ namespace Billions
             Step("로직 틱 내부 계측", () => TickProf.Install(h));
             Step("렌더러 조사", RenderDump.Run);
             Step("최적화 설정", Features.ApplyAtStart);
+            InGameBench.Init(h);   // the benchmark patches its hooks only when one starts
             Log.Info("설치 끝 — 물리 DLL: " + PhysicsDll());
         }
 
@@ -134,6 +136,7 @@ namespace Billions
             try { ZSort.Frame(); } catch (Exception e) { Log.Error("zsort frame", e); }
             try { if (ZXLevelState.get_Current() != null) FarField.Frame(); } catch (Exception e) { Log.Error("far frame", e); }
             if (Bench.Enabled) try { Bench.Frame(); } catch (Exception e) { Log.Error("bench frame", e); }
+            if (InGameBench.Active) InGameBench.Frame();
         }
         static void OnLevelUnloaded()
         {
@@ -141,6 +144,7 @@ namespace Billions
             try { EnergyFix.OnLevelUnloaded(); } catch (Exception e) { Log.Error("energy unload", e); }
             try { FarField.OnLevelUnloaded(); } catch (Exception e) { Log.Error("far unload", e); }
             try { ZSort.OnLevelUnloaded(); } catch (Exception e) { Log.Error("zsort unload", e); }
+            try { InGameBench.OnLevelUnloaded(); } catch (Exception e) { Log.Error("benchmark unload", e); }
         }
     }
 

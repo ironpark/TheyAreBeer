@@ -193,7 +193,32 @@ function Build-Mod([string]$folder = 'mod', [string]$name = 'TABPerf', [string]$
   $here = Join-Path $repo $folder; $out = Join-Path $here 'out'; New-Item -ItemType Directory -Force $out | Out-Null
   $fw = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
   $refs = @('System.dll', 'System.Core.dll', 'System.Drawing.dll', 'System.Windows.Forms.dll', 'System.Numerics.dll' | ForEach-Object { '-r:"' + (Join-Path $fw $_) + '"' })
-  $refs += $refFiles | ForEach-Object { '-r:"' + (Join-Path $RefDir $_) + '"' }
+  # The engine mod compiles against the DXVision the game runs (embedded in its executable), publicized
+  # (scripts\tools\RefTool.cs; the mod's [IgnoresAccessChecksTo("DXVision")] reaches private members with it)
+  $dxv = Join-Path $RefDir 'DXVision.dll'
+  if ($folder -eq 'mod') {
+    $obj = Join-Path $here 'out\obj'; New-Item -ItemType Directory -Force $obj | Out-Null
+    $tool = Join-Path $obj 'RefTool.exe'; $toolSrc = Join-Path $PSScriptRoot 'tools\RefTool.cs'
+    # rebuilt / rerun only when an input changed (a stamp of the inputs' paths, sizes and times next to the output:
+    # older references swapped in, e.g. setup.ps1 -Version v1.1.6, count as a change too)
+    $stampOf = { param($files) ($files | ForEach-Object { $i = Get-Item $_; "$($i.FullName)|$($i.Length)|$($i.LastWriteTimeUtc.Ticks)" }) -join "`n" }
+    $fresh = { param($outFile, $stamp) (Test-Path $outFile) -and (Test-Path "$outFile.stamp") -and ((Get-Content "$outFile.stamp" -Raw) -eq $stamp) }
+    $toolStamp = & $stampOf @($toolSrc)
+    if (-not (& $fresh $tool $toolStamp)) {
+      & $compiler -nologo -langversion:7.3 -optimize+ "-out:$tool" $toolSrc
+      if ($LASTEXITCODE -ne 0) { throw 'RefTool build failed' }
+      [IO.File]::WriteAllText("$tool.stamp", $toolStamp)
+    }
+    $dxv = Join-Path $obj 'ref\DXVision.dll'
+    $exe = Join-Path $RefDir 'TheyAreBillions.exe'; $libDxv = Join-Path $RefDir 'DXVision.dll'
+    $refStamp = & $stampOf @($tool, $exe, $libDxv)
+    if (-not (& $fresh $dxv $refStamp)) {
+      & $tool $exe $libDxv $dxv
+      if ($LASTEXITCODE -ne 0) { throw 'DXVision reference (RefTool) failed' }
+      [IO.File]::WriteAllText("$dxv.stamp", $refStamp)
+    }
+  }
+  $refs += $refFiles | ForEach-Object { '-r:"' + $(if ($_ -eq 'DXVision.dll') { $dxv } else { Join-Path $RefDir $_ }) + '"' }
   $src = @(Get-ChildItem $here -Filter *.cs -Recurse | Where-Object { $_.FullName -notlike "$out\*" } | ForEach-Object { '"' + $_.FullName + '"' })
   # ModInfos.json "Version" is the one version number (the loader's auto-update compares it with the release tag): the
   # DLL gets it as ModBuildInfo.Version and as its informational version

@@ -23,7 +23,7 @@ $files = [ordered]@{
   'rapier'   = @("$out\rapier\DXPhysicsNative.dll", "$out\rapier\rapier2d_ffi.dll", "$out\rapier\rapier2d_ffi_avx2.dll", "$out\rapier\rapier2d_ffi_avx512.dll")
 }
 foreach ($f in $files.Values | ForEach-Object { $_ }) { if (-not (Test-Path $f)) { throw "Missing $f - run scripts\build.ps1 first (all targets)" } }
-$rapierLicense = Join-Path $out 'rapier-src\LICENSE'
+$rapierLicense = Join-Path $out 'rapier-sdk\LICENSE'   # copied there by the Rapier build (scripts\build.ps1)
 if (-not (Test-Path $rapierLicense)) { throw "Missing $rapierLicense - run scripts\build.ps1 -Target rapier first" }
 $dxvk = Get-DxvkD3d9 (Join-Path $out 'dxvk')
 

@@ -65,6 +65,7 @@ function Build-Harness {
 # it delay-loads rapier2d_ffi.dll (or the AVX2 / AVX-512 build) from its own folder.
 $rapierRev = '475caa3ff4646fd9a796b67d14116256f4962bc7'   # Rapier C bindings 0.36.1+c.0
 $rapierToolchain = '1.99.1'                                 # bindings/c needs Rust 1.99
+$rapierBuildId = '1'                                        # bump when the rapier2d_ffi build steps below change (rebuilds reused builds)
 # CMake options; RAPIER_DIM2 / RAPIER_F32 / RAPIER_PARALLEL on the C side must match them (the guide's consumer defines).
 $rapierOptions = [ordered]@{ 'RAPIER_DIMENSION:STRING' = '2'; 'RAPIER_PRECISION:STRING' = '32'; 'RAPIER_ENABLE_PARALLEL:BOOL' = 'ON'; 'RAPIER_SIMD_LANES:STRING' = '8'; 'RAPIER_FEATURES:STRING' = 'profiler' }
 # The same CMake build once per CPU level. DXPhysicsNative.dll picks the highest one the CPU and OS support (CPUID/XGETBV).
@@ -96,39 +97,70 @@ function Build-Rapier {
   $out = Join-Path $native 'out\rapier'; $obj = Join-Path $out 'obj'; New-Item -ItemType Directory -Force $out, $obj | Out-Null
   $srcDir = Join-Path $native 'out\rapier-src'
   function Check([string]$what) { if ($LASTEXITCODE -ne 0) { throw "$what failed" } }
-
-  # Rapier source at the pinned commit, with LF line endings as in the repository (the patches are LF)
-  if (-not (Test-Path (Join-Path $srcDir '.git'))) { & git init -q $srcDir; Check 'git init'; & git -C $srcDir remote add origin https://github.com/dimforge/rapier.git; Check 'git remote' }
-  & git -C $srcDir config core.autocrlf false; Check 'git config'
-  if ((& git -C $srcDir rev-parse -q --verify HEAD 2>$null) -ne $rapierRev) {
-    & git -C $srcDir fetch -q --depth 1 origin $rapierRev; Check 'git fetch'
-    & git -C $srcDir -c advice.detachedHead=false checkout -q --force FETCH_HEAD; Check 'git checkout'
-  }
-  Set-RapierPatches $srcDir @(Get-ChildItem (Join-Path $native 'rapier') -Filter *.patch | Sort-Object Name)
-  if (-not ((& rustup toolchain list) -match [regex]::Escape($rapierToolchain))) { & rustup toolchain install $rapierToolchain --profile minimal; Check "rustup install $rapierToolchain" }
-  $env:RUSTUP_TOOLCHAIN = $rapierToolchain
-  # fat LTO across all crates, one codegen unit: Cargo's release profile through its environment variables
-  $env:CARGO_PROFILE_RELEASE_LTO = 'fat'; $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '1'
-
+  $patches = @(Get-ChildItem (Join-Path $native 'rapier') -Filter *.patch | Sort-Object Name)
   $defs = ($rapierOptions.Keys | ForEach-Object { '-D' + ($_ -replace ':.*$', '') + '=' + $rapierOptions[$_] }) -join ' '
   Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int f);'
-  function Build-Ffi($v) {
+
+  # Each rapier2d_ffi build is installed into native\out\rapier-sdk<variant> with a stamp of everything it is built
+  # from (Rapier commit, toolchain, CMake options, patches, Rust flags). A build whose stamp matches is reused as is:
+  # no source checkout, rustup or Cargo run (CI caches these folders).
+  $patchIds = ($patches | ForEach-Object { "$($_.Name)=$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)" }) -join ' '
+  $variants = foreach ($v in $rapierVariants) {
     $name = $v.suffix -replace '_', '-'
-    $buildDir = Join-Path $native "out\rapier-build$name"; $sdk = Join-Path $native "out\rapier-sdk$name"
-    $test = $v.pf -eq 0 -or [W.K]::IsProcessorFeaturePresent($v.pf)
-    $env:RUSTFLAGS = "-C target-feature=+crt-static$($v.rustflags)"   # static C runtime, like the /MT C side
-    # CMake runs inside the MSVC environment so the tests build with the same compiler as DXPhysicsNative.dll.
-    $cfg = "-S `"$srcDir\bindings\c`" -B `"$buildDir`" -G `"NMake Makefiles`" -DCMAKE_BUILD_TYPE=Release $defs -DRAPIER_SHARED=ON -DRAPIER_BUILD_EXAMPLES=OFF"
-    $steps = "`"$vcvars`" >nul && cmake $cfg && cmake --build `"$buildDir`" --config Release --parallel && cmake --install `"$buildDir`" --config Release --prefix `"$sdk`""
-    if ($test) { $steps += " && ctest --test-dir `"$buildDir`" -C Release --output-on-failure" }
-    $log = Join-Path $out "rapier-build$name.log"
-    Invoke-Cmd $steps $log "Rapier CMake build$name or tests" -Tail
-    $cache = Get-Content (Join-Path $buildDir 'CMakeCache.txt')
-    foreach ($k in $rapierOptions.Keys) { if (-not ($cache -contains "$k=$($rapierOptions[$k])")) { throw "CMake cache$name lacks $k=$($rapierOptions[$k])" } }
-    $tests = if ($test) { (Select-String -Path $log -Pattern 'tests passed' | Select-Object -Last 1).Line } else { 'tests skipped: this CPU lacks the instructions' }
-    @{ sdk = $sdk; tests = $tests; dll = (Join-Path $out "rapier2d_ffi$($v.suffix).dll"); what = $v.what }
+    $sdk = Join-Path $native "out\rapier-sdk$name"
+    $stampFile = Join-Path $sdk 'tabperf-build.txt'
+    $stamp = "build $rapierBuildId; rev $rapierRev; rust $rapierToolchain; rustflags $($v.rustflags); options $defs; patches $patchIds"
+    $have = if (Test-Path $stampFile) { @(Get-Content $stampFile) } else { @() }
+    $fresh = $have.Count -ge 2 -and $have[0] -eq $stamp -and (Test-Path (Join-Path $sdk 'bin\rapier2d_ffi.dll')) -and (Test-Path (Join-Path $sdk 'LICENSE'))
+    @{ v = $v; name = $name; sdk = $sdk; stampFile = $stampFile; stamp = $stamp; fresh = $fresh; tests = $(if ($fresh) { "$($have[1]) (reused build)" } else { '' })
+       buildDir = (Join-Path $native "out\rapier-build$name"); log = (Join-Path $out "rapier-build$name.log"); dll = (Join-Path $out "rapier2d_ffi$($v.suffix).dll") }
   }
-  $built = @($rapierVariants | ForEach-Object { Build-Ffi $_ })
+  $todo = @($variants | Where-Object { -not $_.fresh })
+
+  if ($todo.Count) {
+    # Rapier source at the pinned commit, with LF line endings as in the repository (the patches are LF)
+    if (-not (Test-Path (Join-Path $srcDir '.git'))) { & git init -q $srcDir; Check 'git init'; & git -C $srcDir remote add origin https://github.com/dimforge/rapier.git; Check 'git remote' }
+    & git -C $srcDir config core.autocrlf false; Check 'git config'
+    if ((& git -C $srcDir rev-parse -q --verify HEAD 2>$null) -ne $rapierRev) {
+      & git -C $srcDir fetch -q --depth 1 origin $rapierRev; Check 'git fetch'
+      & git -C $srcDir -c advice.detachedHead=false checkout -q --force FETCH_HEAD; Check 'git checkout'
+    }
+    Set-RapierPatches $srcDir $patches
+    if (-not ((& rustup toolchain list) -match [regex]::Escape($rapierToolchain))) { & rustup toolchain install $rapierToolchain --profile minimal; Check "rustup install $rapierToolchain" }
+
+    # The variants build at the same time, one cmd.exe each (fat LTO with one codegen unit ends in a long single-threaded
+    # link per variant; side by side these overlap). Each has its own build folder, log and RUSTFLAGS.
+    $procs = foreach ($t in $todo) {
+      $test = $t.v.pf -eq 0 -or [W.K]::IsProcessorFeaturePresent($t.v.pf)
+      $t.test = $test
+      # CMake runs inside the MSVC environment so the tests build with the same compiler as DXPhysicsNative.dll.
+      $cfg = "-S `"$srcDir\bindings\c`" -B `"$($t.buildDir)`" -G `"NMake Makefiles`" -DCMAKE_BUILD_TYPE=Release $defs -DRAPIER_SHARED=ON -DRAPIER_BUILD_EXAMPLES=OFF"
+      $steps = "`"$vcvars`" >nul && cmake $cfg && cmake --build `"$($t.buildDir)`" --config Release --parallel && cmake --install `"$($t.buildDir)`" --config Release --prefix `"$($t.sdk)`""
+      if ($test) { $steps += " && ctest --test-dir `"$($t.buildDir)`" -C Release --output-on-failure" }
+      Remove-Item $t.stampFile -ErrorAction SilentlyContinue
+      $psi = New-Object Diagnostics.ProcessStartInfo 'cmd.exe', "/s /c `"$steps > `"$($t.log)`" 2>&1`""
+      $psi.UseShellExecute = $false
+      $psi.EnvironmentVariables['RUSTUP_TOOLCHAIN'] = $rapierToolchain
+      # fat LTO across all crates, one codegen unit: Cargo's release profile through its environment variables
+      $psi.EnvironmentVariables['CARGO_PROFILE_RELEASE_LTO'] = 'fat'
+      $psi.EnvironmentVariables['CARGO_PROFILE_RELEASE_CODEGEN_UNITS'] = '1'
+      $psi.EnvironmentVariables['RUSTFLAGS'] = "-C target-feature=+crt-static$($t.v.rustflags)"   # static C runtime, like the /MT C side
+      Write-Host "Rapier$($t.name): building ($($t.v.what)), log $($t.log)"
+      @{ t = $t; p = [Diagnostics.Process]::Start($psi) }
+    }
+    $failed = @()
+    foreach ($x in $procs) {
+      $x.p.WaitForExit(); $t = $x.t
+      if ($x.p.ExitCode -ne 0) { Write-Host "---- Rapier$($t.name) ----"; Get-Content $t.log -Tail 30 | ForEach-Object { Write-Host $_ }; $failed += "Rapier CMake build$($t.name) or tests failed (see $($t.log))"; continue }
+      $cache = Get-Content (Join-Path $t.buildDir 'CMakeCache.txt')
+      foreach ($k in $rapierOptions.Keys) { if (-not ($cache -contains "$k=$($rapierOptions[$k])")) { throw "CMake cache$($t.name) lacks $k=$($rapierOptions[$k])" } }
+      $t.tests = if ($t.test) { (Select-String -Path $t.log -Pattern 'tests passed' | Select-Object -Last 1).Line } else { 'tests skipped: this CPU lacks the instructions' }
+      Copy-Item (Join-Path $srcDir 'LICENSE') (Join-Path $t.sdk 'LICENSE') -Force
+      Set-Content $t.stampFile @($t.stamp, $t.tests) -Encoding UTF8
+    }
+    if ($failed) { throw ($failed -join '; ') }
+  }
+  $built = @($variants | ForEach-Object { @{ sdk = $_.sdk; tests = $_.tests; dll = $_.dll; what = $_.v.what } })
 
   # DXPhysicsNative.dll (MSVC C)
   $dll = Join-Path $out 'DXPhysicsNative.dll'; $map = Join-Path $out 'DXPhysicsNative.map'

@@ -46,7 +46,7 @@ They Are Billions 최적화 패치
 
 ## 설치
 
-[TABModLoader](https://codeberg.org/JKstring/TABModLoader)(1.1.x)가 설치된 게임에 넣습니다.
+[TABModLoader](https://codeberg.org/JKstring/TABModLoader) v1.1.6이 설치된 게임에 넣습니다. v1.1.7은 게임의 전력 계산 코드를 바꿔 아직 맞추지 않았습니다.
 
 ### 릴리스 파일로 설치
 
@@ -108,12 +108,25 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Engine chipmunk
 
 ## 설정과 로그
 
+주요 설정은 게임 옵션 창의 **최적화** 탭(조작 탭 다음)에서 바꿉니다. 적용을 누르면 저장되고, 다시 시작해야 하는 설정이 바뀌었으면 게임이 다시 시작할지 묻습니다.
+
+| 최적화 탭 | `engine.json` 키 | 적용 시점 |
+| --- | --- | --- |
+| 물리 엔진: Chipmunk2D 다중 코어(기본) / Rapier 2D / 원작 엔진 | `physicsEngine` | 다시 시작 |
+| 렌더러: DXVK(기본) / Direct3D 9 | `renderer` | 다시 시작 |
+| DXVK 최대 FPS: 제한 없음(기본) / 30 / 60 / 120 / 144 | `dxvkMaxFps` | 다시 시작 |
+| 좀비 체력바 가볍게(기본 꺼짐) | `options.json`의 `lightLifeBars` | 바로 |
+| 빠른 타이머 루프(기본 켜짐) | `fastTiming` | 다음 게임(맵) 불러오기 |
+| 로직 따라잡기: 1(원작) ~ 6, 기본 3 | `logicMaxLag` | 다음 게임(맵) 불러오기 |
+
+탭은 바뀐 키만 `engine.json`에 쓰고 다른 키는 그대로 둡니다. 같은 이름의 환경 변수(`TABPERF_...`)가 있으면 그쪽이 앞섭니다.
+
 설정과 로그는 `%APPDATA%\TABPerf`에 저장됩니다.
 
 | 항목 | 설명 |
 | --- | --- |
 | `billions.log` | 모드 로드, 개별 최적화 적용, 물리 DLL 적용 여부 및 오류 기록 |
-| `options.json` | 게임 그래픽 옵션의 **좀비 체력바 가볍게** 설정 저장. 기본값은 꺼짐 |
+| `options.json` | 최적화 탭의 **좀비 체력바 가볍게** 설정 저장. 기본값은 꺼짐 |
 | `engine.json` | 선택적으로 물리 엔진(`physicsEngine`), 물리 계산 반복 횟수(`physicsIterations`), 빠른 타이머(`fastTiming`), 로직 따라잡기(`logicMaxLag`), 그래픽(`renderer`, `dxvkMaxFps`), 진단 기록 설정 지정 |
 | `TheyAreBillions_d3d9.log` | DXVK로 돌 때 DXVK의 로그 |
 | `dxphysics-crash.txt` | 네이티브 DLL 내부 오류 진단 기록. 저장 폴더가 이미 존재할 때 기록 |
@@ -314,7 +327,7 @@ mod/                   C# 엔진 최적화 모드(TABPerf.dll)와 모드 정보(
 ├─ Core/                진입점과 설치 순서(PerfMod), 설정(engine.json 포함)·로그·시계, 공용 Harmony 도우미
 ├─ Physics/             물리 DLL 연결, Rapier 몸체 직접 접근, 물리 단계·게임 시간, 논리/물리 병렬 분할
 ├─ Logic/               좀비 적 찾기, 전력망, 소리
-├─ Render/              렌더러 내부 접근(Renderer), 그리기 순서, 체력바와 옵션 창, 그리기 빠른 길, 웨이브 미니맵 표시
+├─ Render/              렌더러 내부 접근(Renderer), 그리기 순서, 체력바와 옵션 창의 최적화 탭, 그리기 빠른 길, 웨이브 미니맵 표시
 └─ Diag/                성능 시험 모드와 계측
 bench/                 성능 시험용 모드(TABBench.dll). 시험하는 동안만 설치
 docs/

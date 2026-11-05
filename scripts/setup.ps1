@@ -1,5 +1,5 @@
 # Set up a machine for building and running TABPerf, using TABModLoader (https://codeberg.org/JKstring/TABModLoader).
-#   powershell -ExecutionPolicy Bypass -File scripts\setup.ps1 [-GameDir <folder>] [-RefDir <folder>] [-Version v1.1.6] [-NoPatch] [-Force]
+#   powershell -ExecutionPolicy Bypass -File scripts\setup.ps1 [-GameDir <folder>] [-RefDir <folder>] [-Version v1.1.6|latest] [-NoPatch] [-Force]
 # 1. Finds the They Are Billions installation (Steam library folders, or -GameDir).
 # 2. Downloads the build references into <repo>\refs (ignored by git):
 #      TheyAreBillions.exe          - the TABModLoader-patched game executable (ModLoaderUpdate.zip of the release, renamed)
@@ -17,6 +17,9 @@ $repo = Split-Path -Parent $PSScriptRoot
 if (-not $RefDir) { $RefDir = Join-Path $repo 'refs' }
 $api = 'https://codeberg.org/api/v1/repos/JKstring/TABModLoader'
 $exeName = $TabExe
+# the loader release the mod is built and tested against (v1.1.7 rewrote the game's energy code: CEnergyTransferer
+# lost _EnergyEnabled and the mod's power fix targets); -Version latest takes the newest release
+if (-not $Version) { $Version = 'v1.1.6' }
 
 # ---------- 1. game installation ----------
 if ($GameDir) {
@@ -43,7 +46,7 @@ if (-not $Force -and -not $refsMissing -and -not $needPatchCheck) {
 }
 
 # ---------- 3. download the loader release ----------
-$release = if ($Version) { Invoke-RestMethod "$api/releases/tags/$Version" } else { Invoke-RestMethod "$api/releases/latest" }
+$release = if ($Version -eq 'latest') { Invoke-RestMethod "$api/releases/latest" } else { Invoke-RestMethod "$api/releases/tags/$Version" }
 $asset = $release.assets | Where-Object { $_.name -eq 'ModLoaderUpdate.zip' } | Select-Object -First 1
 if (-not $asset) { throw "ModLoaderUpdate.zip not found in release $($release.tag_name)" }
 Write-Host "TABModLoader release $($release.tag_name)"
@@ -63,16 +66,27 @@ try {
   if ($Force -or $refsMissing -or (Hash $refExe) -ne $loaderHash) {
     New-Item -ItemType Directory -Force $RefDir | Out-Null
     Copy-Item $loaderExe.FullName $refExe -Force
-    $libs = Invoke-RestMethod "$api/contents/Lib" | Where-Object { $_.type -eq 'dir' -and $_.name -match '^v\d+(\.\d+)*$' }
-    $lib = $libs | Sort-Object { [version]($_.name.Substring(1)) } | Select-Object -Last 1
-    if (-not $lib) { throw 'No Lib\v* folder found in the TABModLoader repository' }
-    $entries = Invoke-RestMethod "$api/contents/$($lib.path)"
+    # each library from the newest Lib\v* folder, up to the release's version, that has it (a loader release only adds
+    # the libraries it changed: Lib\v1.1.7 holds DXVision.dll alone, 0Harmony.dll is in Lib\v1.1.0)
+    # (parentheses: Windows PowerShell 5.1 sends a JSON array down the pipeline as one object)
+    $relVersion = [version]$release.tag_name.TrimStart('v')
+    $libs = (Invoke-RestMethod "$api/contents/Lib") | Where-Object { $_.type -eq 'dir' -and $_.name -match '^v\d+(\.\d+)*$' } |
+      Where-Object { [version]($_.name.Substring(1)) -le $relVersion } | Sort-Object { [version]($_.name.Substring(1)) } -Descending
+    if (-not $libs) { throw 'No Lib\v* folder found in the TABModLoader repository' }
+    $listings = @{}
+    $from = @()
     foreach ($name in 'DXVision.dll', '0Harmony.dll') {
-      $e = $entries | Where-Object { $_.name -eq $name } | Select-Object -First 1
-      if (-not $e) { throw "$name not found in $($lib.path)" }
+      $e = $null
+      foreach ($lib in $libs) {
+        if (-not $listings.ContainsKey($lib.path)) { $listings[$lib.path] = Invoke-RestMethod "$api/contents/$($lib.path)" }
+        $e = @($listings[$lib.path]) | Where-Object { $_.name -eq $name } | Select-Object -First 1
+        if ($e) { break }
+      }
+      if (-not $e) { throw "$name not found in any Lib\v* folder of the TABModLoader repository" }
       Invoke-WebRequest $e.download_url -OutFile (Join-Path $RefDir $name) -UseBasicParsing
+      $from += "$name from $($lib.path)"
     }
-    Write-Host "References: $RefDir (libraries from $($lib.path))"
+    Write-Host "References: $RefDir ($($from -join ', '))"
     foreach ($f in $refFiles) { $p = Join-Path $RefDir $f; Write-Host ('  {0,-20} {1,10:N0} bytes  SHA256 {2}' -f $f, (Get-Item $p).Length, (Hash $p)) }
   } else { Write-Host "References: up to date in $RefDir" }
 

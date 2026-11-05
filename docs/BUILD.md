@@ -39,7 +39,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 
 - `-NoPatch`: 게임 파일은 건드리지 않고, 패치 상태만 보여 주고 참조 파일만 받습니다.
 - `-GameDir <폴더>`: 게임 설치 폴더를 직접 지정합니다.
-- `-Version v1.1.6`: 특정 릴리스를 받습니다.
+- `-Version <태그>`: 받을 TABModLoader 릴리스입니다. 기본은 모드가 맞춰진 `v1.1.6`이고, `latest`면 최신 릴리스를 받습니다. v1.1.7은 게임의 전력 계산 코드를 바꿔 모드가 아직 빌드되지 않습니다.
 - `-RefDir <폴더>`: 참조 파일을 저장할 폴더를 지정합니다.
 - `-Force`: 이미 있어도 다시 받습니다.
 

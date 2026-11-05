@@ -77,7 +77,7 @@ namespace Billions
             Step("좀비 적 찾기 건너뛰기", () => FarField.Install(h));
             Step("그리기 순서 상황형 정렬", () => ZSort.Install(h));
             Step("소리 장치 다시 켜기 줄이기", () => SoundIdle.Install(h));
-            Step("좀비 체력바 옵션", () => { LifeMarkers.Install(h); GameOptions.Install(h); });
+            Step("최적화 옵션 탭", () => { LifeMarkers.Install(h); GameOptions.Install(h); });
             Step("웨이브 미니맵 표시", () => SwarmFast.Install(h));
             Step("D3D 장치 확인", () => DeviceCheck.Install(h));
             Step("그리기 빠른 길", () => DrawFast.Install(h));

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Text;
 using DXVision;
 using DXVision.GUI;
 using HarmonyLib;
@@ -10,7 +11,10 @@ using ZX.GUI;
 
 namespace Billions
 {
-
+    // The "Optimization" page of the game's options window (after Controls): the engine.json settings (physics engine,
+    // renderer, DXVK frame cap, fast timing, logic catch-up) and the light health bars (options.json). Values are saved
+    // when the window's Apply button is pressed; a changed setting that needs a restart sets the game's NeedReboot, so
+    // Apply shows the game's own restart prompt.
     public static class GameOptions
     {
         public static bool LightLifeBars;
@@ -25,7 +29,7 @@ namespace Billions
                 if (File.Exists(FilePath))
                 {
                     var m = MiniJson.Parse(File.ReadAllText(FilePath)) as Dictionary<string, object>;
-                    object v; LightLifeBars = m != null && m.TryGetValue("lightLifeBars", out v) && v is bool && (bool)v;
+                    LightLifeBars = MiniJson.Bool(m, "lightLifeBars");
                 }
             }
             catch (Exception e) { Log.Error("options load", e); }
@@ -33,17 +37,13 @@ namespace Billions
             Log.Info("options: 좀비 체력바 가볍게 = " + LightLifeBars);
         }
 
-        static void Save()
+        static void WriteFile(string path, string text)
         {
-            try
-            {
-                Directory.CreateDirectory(Log.Dir);
-                string tmp = FilePath + ".tmp";
-                File.WriteAllText(tmp, "{\"lightLifeBars\":" + (LightLifeBars ? "true" : "false") + "}");
-                if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null);
-                else File.Move(tmp, FilePath);
-            }
-            catch (Exception e) { Log.Error("options save", e); }
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp, text);
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
         }
 
         public static void Install(Harmony h)
@@ -52,11 +52,18 @@ namespace Billions
             {
                 Load();
                 var m = AccessTools.Method(typeof(ZXGame), "ShowOptionsWindow");
-                if (m == null) { Log.Info("HOOK MISSING (optional): ZXGame.ShowOptionsWindow — 옵션 줄 없음(체력바는 저장값대로)"); return; }
+                if (m == null) { Log.Info("HOOK MISSING (optional): ZXGame.ShowOptionsWindow — 최적화 탭 없음(설정은 engine.json/options.json 대로)"); return; }
                 h.Patch(m, null, new HarmonyMethod(typeof(GameOptions), nameof(AfterShow)));
-                Installed = 1; Log.Info("hook: ZXGame.ShowOptionsWindow (postfix, 그래픽 탭에 「좀비 체력바 가볍게」)");
+                Installed = 1; Log.Info("hook: ZXGame.ShowOptionsWindow (postfix, 「최적화」 탭)");
             }
             catch (Exception e) { Installed = 0; Log.Error("options install", e); }
+        }
+
+        // one engine.json choice shown as a combo box
+        sealed class Choice
+        {
+            public string Key; public bool Reboot; public object[] Values; public object Initial; public ZXComboBox Box;
+            public object Selected { get { int i = Box.SelectedIndex; return i >= 0 && i < Values.Length ? Values[i] : Initial; } }
         }
 
         static void AfterShow()
@@ -64,59 +71,134 @@ namespace Billions
             try
             {
                 var root = DXScene.Current != null ? DXScene.Current.RootObject : null; if (root == null) return;
-
                 ZXWindowTab win = null; var rc = _children(root);
                 if (rc != null) for (int i = rc.Count - 1; i >= 0 && win == null; i--) win = rc[i] as ZXWindowTab;
-                if (win == null) return;
-                string fast = ZXGame.W("FastTimming");
-                var grid = FindGrid(win, fast); if (grid == null) { Log.Info("options: 그래픽 표를 못 찾음 — 줄을 더하지 않음"); return; }
-                float labelW = win.PageSize.Width * 0.3f;
-                var size = new SizeF(win.PageSize.Width * 0.3f, DXScene.ScreenVirtualUnit * 20f);
-                string title = Text("좀비 체력바 가볍게(최적화)", "Light zombie health bars");
-                if (HasRow(grid, title)) return;
-                var label = TextTemplates.Interface.get_NormalBig().CreateObject(title, new ContentAlignment?(ContentAlignment.TopRight), new float?(labelW));
-                var ch = new ZXCheckBox(); ch.Size = size; ch.Checked = LightLifeBars;
-                ch.CheckedChanged += delegate (DXCheckBox c)
-                {
-                    LightLifeBars = c.Checked; Save();
-                    try { LifeMarkers.SetMode(LightLifeBars ? 2 : 0); } catch (Exception e) { Log.Error("options life mode", e); }
-                    Log.Info("options: 좀비 체력바 가볍게 = " + LightLifeBars);
-                };
-                grid.AddRow(new DXObject[] { label, ch });
-                grid[0, grid.NRows - 1].Object.Tag = new ZXHelp(ZXAlignment.BottomCenter, title,
-                    Text("좀비 체력바를 테두리 없는 얇은 막대 하나로 그려 좀비가 많을 때 화면이 덜 느려집니다. 끄면 원작 체력바 그대로입니다. 바로 적용됩니다.",
-                         "Draws zombie health bars as a single thin bar so large hordes render faster. Off = original health bars. Applies immediately."), null, null, null);
+                if (win == null || win._OButtonRight == null) return;
+                BuildPage(win);
             }
-            catch (Exception e) { Log.Error("options row", e); }
+            catch (Exception e) { Log.Error("options page", e); }
+        }
+
+        static void BuildPage(ZXWindowTab win)
+        {
+            var cfgGame = (ZXGameConfiguration)DXGame.Current.Configuration;
+            var cfg = Settings.Config();
+            float titleW = win.PageSize.Width * 0.4f, labelW = win.PageSize.Width * 0.3f, rowH = DXScene.ScreenVirtualUnit * 20f;
+            var size = new SizeF(win.PageSize.Width * 0.3f, rowH);
+            var comboSize = new SizeF(size.Width + DXScene.Unit * 80f, rowH);
+
+            var page = win.AddPage(Text("최적화", "Optimization"));
+            var grid = DXGridLayout.NewFormLayout(page.Panel.ContentWidth, 0, fitToContent: true);
+            page.Panel.Content.AddObject(grid);
+            grid.DefaultRowHeight = rowH;
+            grid.Border = null;
+            grid.DefaultCellSpacing = new SizeF(DXScene.ScreenVirtualUnit * 5f, DXScene.ScreenVirtualUnit * 5f);
+
+            var choices = new List<Choice>();
+            Action<string> title = t => grid.AddRow(TextTemplates.Interface.get_TitleSmall().CreateObject(t, new ContentAlignment?(ContentAlignment.MiddleRight), new float?(titleW)));
+            Action<string, string, DXObject> row = (label, help, control) =>
+            {
+                grid.AddRow(new DXObject[] { TextTemplates.Interface.get_NormalBig().CreateObject(label, new ContentAlignment?(ContentAlignment.TopRight), new float?(labelW)), control });
+                grid[0, grid.NRows - 1].Object.Tag = new ZXHelp(ZXAlignment.BottomCenter, label, help, null, null, null);
+            };
+            Func<string, bool, object, object[], string[], Choice> combo = (key, reboot, current, values, names) =>
+            {
+                var c = new Choice { Key = key, Reboot = reboot, Initial = current, Values = values, Box = new ZXComboBox() };
+                int sel = Array.IndexOf(values, current);
+                if (sel < 0)   // a value set by hand in engine.json that is not in the list: keep it as its own entry
+                {
+                    var v = new List<object>(values) { current }; var n = new List<string>(names) { Convert.ToString(current) };
+                    c.Values = v.ToArray(); names = n.ToArray(); sel = c.Values.Length - 1;
+                }
+                c.Box.Items = new List<string>(names);
+                c.Box.SelectedIndex = sel;
+                c.Box.Size = comboSize;
+                if (reboot) c.Box.SelectedIndexChanged += delegate { if (!Equals(c.Selected, c.Initial)) cfgGame.NeedReboot = true; };
+                choices.Add(c);
+                return c;
+            };
+            string restart = Text(" 게임을 다시 시작하면 적용됩니다.", " Applies after a restart.");
+            string nextLevel = Text(" 다음에 게임(맵)을 불러올 때 적용됩니다.", " Applies the next time a game (map) is loaded.");
+
+            title(Text("물리", "Physics"));
+            var engine = combo("physicsEngine", true, MiniJson.Str(cfg, "physicsEngine", "chipmunk").Trim().ToLowerInvariant(),
+                new object[] { "chipmunk", "rapier", "original" },
+                new[] { Text("Chipmunk2D 다중 코어(기본)", "Chipmunk2D multi-core (default)"), "Rapier 2D", Text("원작 엔진", "Original engine") });
+            row(Text("물리 엔진", "Physics engine"), Text(
+                "좀비와 건물의 충돌을 계산하는 엔진입니다. Chipmunk2D 다중 코어가 기본이고, Rapier 2D는 좀비가 아주 많을 때 더 빠릅니다. 원작 엔진은 이 모드의 물리 최적화를 끕니다.",
+                "The engine that computes collisions. Chipmunk2D multi-core is the default; Rapier 2D is faster with very large hordes. Original turns this mod's physics changes off.") + restart, engine.Box);
+
+            title(Text("그래픽", "Graphics"));
+            var renderer = combo("renderer", true, MiniJson.Str(cfg, "renderer", "dxvk").Trim().ToLowerInvariant(),
+                new object[] { "dxvk", "d3d9" }, new[] { Text("DXVK (Vulkan, 기본)", "DXVK (Vulkan, default)"), Text("Direct3D 9 (원작)", "Direct3D 9 (original)") });
+            row(Text("렌더러", "Renderer"), Text(
+                "DXVK는 게임의 Direct3D 9 그리기를 Vulkan으로 바꿔 좀비가 많을 때 프레임이 더 잘 나옵니다. Vulkan을 지원하는 그래픽 드라이버가 필요합니다.",
+                "DXVK runs the game's Direct3D 9 drawing on Vulkan, which keeps the frame rate up with large hordes. Needs a Vulkan graphics driver.") + restart, renderer.Box);
+            var fps = combo("dxvkMaxFps", true, (object)MiniJson.Int(cfg, "dxvkMaxFps", 0),
+                new object[] { 0, 30, 60, 120, 144 }, new[] { Text("제한 없음", "No limit"), "30", "60", "120", "144" });
+            row(Text("DXVK 최대 FPS", "DXVK frame cap"), Text("DXVK로 그릴 때 초당 프레임 수의 상한입니다.", "The frame rate limit when drawing with DXVK.") + restart, fps.Box);
+
+            var light = new ZXCheckBox(); light.Size = size; light.Checked = LightLifeBars;
+            row(Text("좀비 체력바 가볍게", "Light zombie health bars"), Text(
+                "좀비 체력바를 테두리 없는 얇은 막대 하나로 그려 좀비가 많을 때 화면이 덜 느려집니다. 끄면 원작 체력바 그대로입니다. 적용을 누르면 바로 바뀝니다.",
+                "Draws zombie health bars as a single thin bar so large hordes render faster. Off = original health bars. Applies right away."), light);
+
+            title(Text("게임 시간", "Game time"));
+            var fast = new ZXCheckBox(); fast.Size = size; bool fastInit = MiniJson.Bool(cfg, "fastTiming", true); fast.Checked = fastInit;
+            row(Text("빠른 타이머 루프", "Fast timing loop"), Text(
+                "그래픽 탭의 FastTimming이 꺼져 있어도 게임 시간을 실제 경과 시간으로 진행해, 물리 계산이 길어질 때 게임이 느려지지 않게 합니다. 끄면 게임 옵션을 그대로 따릅니다.",
+                "Advances game time by the real elapsed time even with the Graphics tab's FastTimming off, so long physics updates don't slow the game down. Off = follow the game option.") + nextLevel, fast);
+            var lag = combo("logicMaxLag", false, (object)MiniJson.Int(cfg, "logicMaxLag", 3),
+                new object[] { 1, 2, 3, 4, 5, 6 }, new[] { Text("1 (원작)", "1 (original)"), "2", Text("3 (기본)", "3 (default)"), "4", "5", "6" });
+            row(Text("로직 따라잡기", "Logic catch-up"), Text(
+                "게임 로직이 밀렸을 때 한 프레임에 더 돌릴 수 있는 틱 수입니다. 크면 좀비가 많을 때 게임 속도가 덜 떨어지지만 프레임이 길어질 수 있습니다.",
+                "How many extra logic ticks a frame may run when the game logic falls behind. Higher keeps game speed up with large hordes at the cost of longer frames.") + nextLevel, lag.Box);
+
+            win._OButtonRight.Activated += delegate
+            {
+                try
+                {
+                    if (light.Checked != LightLifeBars)
+                    {
+                        LightLifeBars = light.Checked;
+                        WriteFile(FilePath, "{\"lightLifeBars\":" + (LightLifeBars ? "true" : "false") + "}");
+                        try { LifeMarkers.SetMode(LightLifeBars ? 2 : 0); } catch (Exception e) { Log.Error("options life mode", e); }
+                        Log.Info("options: 좀비 체력바 가볍게 = " + LightLifeBars);
+                    }
+                    var changed = new Dictionary<string, object>();
+                    foreach (var c in choices) if (!Equals(c.Selected, c.Initial)) changed[c.Key] = c.Selected;
+                    if (fast.Checked != fastInit) changed["fastTiming"] = fast.Checked;
+                    if (changed.Count == 0) return;
+                    var now = Settings.Config() ?? new Dictionary<string, object>();   // keep the other keys as they are in the file
+                    foreach (var kv in changed) now[kv.Key] = kv.Value;
+                    WriteFile(Settings.ConfigPath, Pretty(now));
+                    var sb = new StringBuilder();
+                    foreach (var kv in changed) sb.Append(sb.Length > 0 ? ", " : "").Append(kv.Key).Append(" = ").Append(MiniJson.Serialize(kv.Value));
+                    Log.Info("options: engine.json 저장 — " + sb);
+                    foreach (var env in new[] { "TABPERF_ENGINE", "TABPERF_RENDERER", "TABPERF_DXVK_FPS", "TABPERF_FASTTIMING", "TABPERF_LOGIC_LAG" })
+                        if (Settings.Env(env) != null) Log.Info("options: 환경 변수 " + env + " 가 engine.json 보다 앞선다");
+                }
+                catch (Exception e) { Log.Error("options save", e); }
+            };
+        }
+
+        // engine.json one key per line, so it stays easy to edit by hand
+        static string Pretty(Dictionary<string, object> m)
+        {
+            var sb = new StringBuilder("{");
+            bool first = true;
+            foreach (var kv in m)
+            {
+                sb.Append(first ? "\r\n  " : ",\r\n  ").Append(MiniJson.Serialize(kv.Key)).Append(": ").Append(MiniJson.Serialize(kv.Value));
+                first = false;
+            }
+            return sb.Append(first ? "}" : "\r\n}\r\n").ToString();
         }
 
         static string Text(string ko, string en)
         {
             try { var c = DXGame.Current.Configuration as ZXGameConfiguration; if (c != null && c.Language == DXLanguageType.KO) return ko; } catch { }
             return en;
-        }
-
-        static bool HasRow(DXGridLayout g, string label)
-        {
-            try
-            {
-                for (int r = 0; r < g.NRows; r++)
-                {
-                    var t = g[0, r] != null ? g[0, r].Object as DXTextObject : null;
-                    if (t != null && t.Text == label) return true;
-                }
-            }
-            catch { }
-            return false;
-        }
-
-        static DXGridLayout FindGrid(DXObject o, string fastLabel)
-        {
-            var g = o as DXGridLayout;
-            if (g != null && HasRow(g, fastLabel)) return g;
-            var ch = _children(o); if (ch == null) return null;
-            for (int i = 0; i < ch.Count; i++) { var f = ch[i] != null ? FindGrid(ch[i], fastLabel) : null; if (f != null) return f; }
-            return null;
         }
     }
 }

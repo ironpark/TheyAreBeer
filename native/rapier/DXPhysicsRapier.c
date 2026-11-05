@@ -374,6 +374,7 @@ static int shapes_overlap(const DxShape *s1, const DxShape *s2)
 }
 
 /* Chipmunk wrapper's rule, collide when either category/mask direction matches, is Rapier's OR test mode. */
+#define DX_ALL_BITS ((LONG)0xFFFFFFFF)
 static struct R2InteractionGroups groups_of(LONG cat, LONG mask) { struct R2InteractionGroups g; g.memberships = (uint32_t)cat; g.filter = (uint32_t)mask; g.test_mode = 1; return g; }
 static int query_pass(const DxShape *s, unsigned mask) { return ((unsigned)s->cat & mask) != 0; }
 
@@ -702,7 +703,10 @@ static struct R2ColliderDesc collider_desc(int kind, float w, float h)
 	else { struct R2Vector he; he.x = w + DX_BOX_RADIUS; he.y = h + DX_BOX_RADIUS; d = r2CuboidColliderDesc(he); }
 	d.massMode = R2_MASS_DENSITY; d.density = 0.0f;
 	d.friction = 0.0f; d.restitution = 0.0f; d.frictionCombineRule = R2_COMBINE_MULTIPLY; d.restitutionCombineRule = R2_COMBINE_MULTIPLY;
-	d.collisionGroups = groups_of(0, 0);   /* real groups / events are synced before the next step */
+	/* Chipmunk's default filter (CP_SHAPE_FILTER_ALL: every category, every mask), as add_shape records it. The game sets
+	   its own masks on entity bodies; bodies without an entity keep this one (the map's inaccessible terrain, static
+	   rectangles from CAccesibleLayer, must block everything). Changes are synced before the next step. */
+	d.collisionGroups = groups_of(DX_ALL_BITS, DX_ALL_BITS);
 	d.activeHooks = 0; d.activeEvents = 0;
 	return d;
 }
@@ -716,6 +720,7 @@ static DxShape *add_shape(DxBody *b, int kind, float w, float h, int sensor)
 	if (r2LastStatus() != R2_OK) return NULL;
 	DxShape *s = (DxShape *)calloc(1, sizeof(DxShape)); if (!s) abort();
 	s->h = ch; s->body = b; s->kind = kind; s->hw = w; s->hh = h; s->sensor = sensor;
+	s->cat = s->mask = s->appCat = s->appMask = DX_ALL_BITS;   /* collider_desc's groups */
 	s->next = b->shapes; b->shapes = s;
 	InterlockedOr(&b->dirty, D_FLAGS);
 	push_shape(s);

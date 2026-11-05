@@ -1,0 +1,16 @@
+{
+  "Id": "tabperf.bench",
+  "Name": "TABBench (benchmark)",
+  "Version": "1.0.0",
+  "Author": "ddolddolddol-e",
+  "Description": "TABPerf 성능 시험용. TABBENCH_CSV 환경 변수가 없으면 아무것도 하지 않는다(scripts\\bench.ps1 이 시험 동안만 설치).",
+  "IsCampaign": false,
+  "IsGlobalEnabled": true,
+  "Dependencies": [],
+  "ConflictsWith": [],
+  "Priority": 0,
+  "Enabled": true,
+  "RequiredModLoaderVersion": "1.1.0",
+  "AllowAutoUpdate": false,
+  "ShowInCustomLevels": false
+}

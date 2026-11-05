@@ -3,42 +3,31 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Threading;
 using DXVision;
 using HarmonyLib;
 using ZX;
-using ZX.Components;
 using ZX.Entities;
-using ZX.GameSystems;
 
 namespace Billions
 {
-    // Performance test mode, off unless engine.json has "bench": true (or TABPERF_BENCH=1). Every setting below can also be
-    // given as an environment variable, which wins over engine.json (scripts\bench.ps1 uses them):
-    //   bench TABPERF_BENCH · benchAuto TABPERF_BENCH_AUTO · benchSeconds TABPERF_BENCH_SECONDS · benchSwarmDelay TABPERF_BENCH_DELAY
-    //   benchSwarmFactor TABPERF_BENCH_FACTOR · benchSeed TABPERF_BENCH_SEED · benchThreads TABPERF_BENCH_THREADS
-    //   benchZoom TABPERF_BENCH_ZOOM ("max" | "off") · benchCsv TABPERF_BENCH_CSV (CSV path)
-    //  - Ctrl+Shift+F9 in a level triggers the final swarm right away, "benchSwarmFactor" times (default 4), on the
-    //    game's own event thread (ZXSystem_GameLevel.ProcessLevelEvents), as if it had come due that many times.
-    //  - Every second appends a row to %APPDATA%\TABPerf\bench.csv: frames, frame time, physics steps and step time
-    //    (DXPhysicWorld.Step = one Space_Step), live zombies, physics engine.
-    //  - The automatic run ("benchAuto") starts a fixed survival game, zoomed out as far as the game allows (benchZoom "max",
-    //    the default), so every run draws the same view.
+    // Diagnostic recording for development, off unless engine.json has "bench": true (or TABPERF_BENCH=1): every second
+    // appends a row to %APPDATA%\TABPerf\bench.csv (benchCsv / TABPERF_BENCH_CSV): frames, frame time, physics steps and
+    // step time (DXPhysicWorld.Step = one Space_Step), live zombies, physics engine, then the wrapper's, Rapier's and the
+    // game's internal sections. It turns the wrapper's timed diagnostics on, which cost time on hot paths: use it to look
+    // inside a run, not to compare engines (scripts\bench.ps1 compares them with the separate TABBench mod, which also
+    // drives the scenario; bench.ps1 -Diag adds this recording to its runs). benchThreads / TABPERF_BENCH_THREADS sets
+    // the physics worker threads for the run (DX_SetOption(0)).
     public static class Bench
     {
         public static bool Enabled;
-        static int _factor = 4;
         // DX_SetOption 340-347 pairs (time, calls), in this order
         static readonly string CallHeader = string.Concat(Array.ConvertAll(new[] { "angle", "size", "dispose", "sensor" }, k => ",n_" + k + "_per_s,n_" + k + "_ms"));
         static readonly string QueryHeader = string.Concat(Array.ConvertAll(new[] { "area", "radius", "fast", "near", "ray", "space" },
             k => ",q_" + k + "_per_s,q_" + k + "_ms,q_" + k + "_lock_ms,q_" + k + "_cb_ms,q_" + k + "_cand,q_" + k + "_hits"));
         static string _engine;   // read in the first level: the game loads its physics DLL after the mod installs
-        static bool _keyDown;
-        static volatile int _pending;
-
-        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
-        const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_F9 = 0x78;
+        static int _threads;
+        static bool _levelSeen;
 
         public static void Install(Harmony h)
         {
@@ -47,166 +36,28 @@ namespace Billions
                 var m = Settings.Config();
                 Enabled = Settings.Bool(m, "bench", "TABPERF_BENCH", false);
                 if (!Enabled) return;
-                _factor = Math.Max(1, Math.Min(20, Settings.Int(m, "benchSwarmFactor", "TABPERF_BENCH_FACTOR", 4)));
-                _auto = Settings.Bool(m, "benchAuto", "TABPERF_BENCH_AUTO", false);
-                _autoSeconds = Math.Max(30, Settings.Int(m, "benchSeconds", "TABPERF_BENCH_SECONDS", 240));
-                _autoDelay = Math.Max(1, Settings.Int(m, "benchSwarmDelay", "TABPERF_BENCH_DELAY", 5));
-                _autoSeed = Settings.Int(m, "benchSeed", "TABPERF_BENCH_SEED", 20261104);
                 _threads = Settings.Int(m, "benchThreads", "TABPERF_BENCH_THREADS", -1);
-                string zoom = Settings.Str(m, "benchZoom", "TABPERF_BENCH_ZOOM", "max").ToLowerInvariant();
-                if (zoom != "max" && zoom != "off") { Log.Info("bench: benchZoom \"" + zoom + "\" 은 모름 — max 를 쓴다(max · off)"); zoom = "max"; }
-                _zoomMax = zoom == "max";
                 _csv = Settings.Str(m, "benchCsv", "TABPERF_BENCH_CSV", null);
             }
             catch (Exception e) { Log.Error("bench config", e); return; }
-            var pe = AccessTools.Method(typeof(ZXSystem_GameLevel), "ProcessLevelEvents");
             var st = AccessTools.Method(typeof(DXPhysicWorld), "Step", new[] { typeof(double) });
-            if (pe == null || st == null) { Log.Info("HOOK MISSING (optional): 성능 시험 — ProcessLevelEvents/DXPhysicWorld.Step 없음"); Enabled = false; return; }
-            h.Patch(pe, null, new HarmonyMethod(typeof(Bench), nameof(AfterEvents)));
+            if (st == null) { Log.Info("HOOK MISSING (optional): 진단 기록 — DXPhysicWorld.Step 없음"); Enabled = false; return; }
             h.Patch(st, new HarmonyMethod(typeof(Bench), nameof(StepPre)), new HarmonyMethod(typeof(Bench), nameof(StepPost)));
-            if (_auto)
+            // the end of the run (TABBench quits the game): last row and the profilers' totals
+            AppDomain.CurrentDomain.ProcessExit += delegate
             {
-                var ss = AccessTools.Method(typeof(ZXSystem_StartScreen), "ShowScene");
-                if (ss == null) { Log.Info("HOOK MISSING (optional): 자동 시험 — ZXSystem_StartScreen.ShowScene 없음"); _auto = false; }
-                else { h.Patch(ss, null, new HarmonyMethod(typeof(Bench), nameof(AfterStartScreen))); Log.Info("bench: 자동 시험 — 시작 화면에서 생존 게임(900% 설정, 시드 " + _autoSeed + ")을 바로 시작 · " + _autoDelay + "초 뒤 피해 끔 + 마지막 웨이브 x" + _factor + " · " + _autoSeconds + "초 뒤 게임 종료 · 줌 " + (_zoomMax ? "최대로 뺌" : "그대로")); }
-                var cam = AccessTools.Method(typeof(ZXSystem_GameLevel), "OnSetCamera");
-                if (_auto && _zoomMax)
-                {
-                    if (cam == null) Log.Info("HOOK MISSING (optional): 자동 시험 줌 — ZXSystem_GameLevel.OnSetCamera 없음");
-                    else h.Patch(cam, null, new HarmonyMethod(typeof(Bench), nameof(AfterSetCamera)));
-                }
-            }
-            Log.Info("bench: 성능 시험 모드 — Ctrl+Shift+F9 = 마지막 웨이브 x" + _factor + " 바로 · 초당 기록 " + CsvPath);
-        }
-
-        static string _csv;
-        static string CsvPath { get { return _csv ?? Path.Combine(Log.Dir, "bench.csv"); } }
-
-        // ---------- automatic run: start screen -> survival game -> swarm -> exit ----------
-        static bool _auto, _autoStarted; static int _autoSeconds, _autoDelay, _autoSeed, _threads;
-        static long _levelAt; static bool _swarmed;
-        static bool _zoomMax, _zoomLogged;
-        static void AfterStartScreen()
-        {
-            if (!_auto || _autoStarted) return;
-            _autoStarted = true;
-            // The start screen is shown from inside the game's first scene change; a second ChangeScene before that one
-            // ends loses its fade callback (one fade slot) and never loads. Wait until it is over and the menu settled.
-            new Thread(() =>
-            {
-                try
-                {
-                    int calm = 0;
-                    for (int i = 0; i < 600 && calm < 20; i++) { Thread.Sleep(100); calm = ZXGame.get_Current().ChangingScene || ZXGame.get_Current().IsLoading ? 0 : calm + 1; }
-                    DXGame.Current.InvokeOnStartFrame(StartSurvival);
-                }
-                catch (Exception e) { Log.Error("bench auto wait", e); }
-            }) { IsBackground = true, Name = "TABPerf bench start" }.Start();
-        }
-        // The "Start Game" button of the survival window (ZXSystem_StartScreen.NewSurvivalGame) with fixed settings:
-        // most infected (150%), shortest duration (80 days), and the map theme with the highest score factor -> the
-        // game's highest score factor; a fixed seed makes the same map every run.
-        static void StartSurvival()
-        {
-            try
-            {
-                const string name = "TABPerfBench";
-                ZXGame.get_Current().DeleteSaveGames(name);
-                var p = new ZXRandomLevelParams();
-                ZXMapTheme best = null;
-                foreach (var t in ZXMapTheme.get_AllThemes().Values) if (best == null || t.ScoreFactor > best.ScoreFactor) best = t;
-                p.ThemeType = best.MapThemeType; p.FactorZombiePopulation = 1.5f; p.FactorGameDuration = 0.8f;
-                p.Seed = _autoSeed; p.Name = name; p.NCells = 256; p.DifficultyType = (ZXSurvivalDifficultyType)3;
-                Log.Info("bench: 자동 시험 — 생존 게임 시작 · 테마 " + best.Name + " · 점수 배율 " + Math.Round(p.ScoreFactor * 100) + "% · 시드 " + p.Seed);
-                ZXGame.get_Current().ChangeScene(20, delegate
-                {
-                    ZXGameState.set_Current(new ZXGameState(name));
-                    ZXGameState.get_Current().GameMode = ZXGameModeType.Survival;
-                    ZXGameState.get_Current().SurvivalModeParams = p;
-                    ZXLevelState.set_Current(new ZXLevelState());
-                    ZXLevelState.get_Current().WriteCurrentGameState();
-                    ZXGame.get_Current().CurrentGameSystem = DXSystem.Load<ZXSystem_GameLevel>(false);
-                    (ZXGame.get_Current().CurrentGameSystem as ZXSystem_GameLevel).LoadLevel(ZXLevelGenerator.Create(p));
-                }, delegate { ZXGame.get_Current().CurrentGameSystem.ShowScene(); }, new List<string> { "TABPerf bench" }, true);
-            }
-            catch (Exception e) { Log.Error("bench auto start", e); }
-        }
-        // Called every level frame in automatic mode.
-        static void AutoFrame(long now)
-        {
-            if (_levelAt == 0)
-            {
-                _levelAt = now; Log.Info("bench: 자동 시험 — 레벨 시작");
-                // benchThreads: physics worker threads for this run (DX_SetOption(0); the DLL default is automatic)
-                if (_threads >= 0) try { Log.Info("bench: 물리 작업 스레드 " + _threads + " → " + PerfMod.PhysOpt(0, _threads)); } catch (Exception e) { Log.Error("bench threads", e); }
-            }
-            double sec = (now - _levelAt) / (double)Stopwatch.Frequency;
-            if (DXGame.Current.Paused && sec >= 2) DXGame.Current.Paused = false;   // keep the clock running through start messages
-            if (!_swarmed && sec >= _autoDelay)
-            {
-                _swarmed = true;
-                CLife.DamageAvailable = false;   // the game's debug switch: nothing dies, so the crowd only grows and every engine gets the same load
-                _pending = 1;
-                Log.Info("bench: 자동 시험 — 피해 끔 · 마지막 웨이브 x" + _factor + " 요청");
-            }
-            if (sec >= _autoDelay + _autoSeconds)
-            {
+                if (!_levelSeen) return;
                 Row("end");
                 PostProf.Dump();
                 TickProf.Dump();
                 if (PhysicsRedirect.Module != IntPtr.Zero)
                     Log.Info("bench: 게임 폴더 물리 DLL " + (PhysicsRedirect.GameDllLoaded() ? "도 올라와 있다(게임 시작 때 확인 호출 등)" : "은 올라오지 않았다 — 모든 물리 호출이 모드 쪽으로 갔다"));
-                Log.Info("bench: 자동 시험 끝 — 게임 종료");
-                Environment.Exit(0);
-            }
+            };
+            Log.Info("bench: 진단 기록 — 초당 기록 " + CsvPath);
         }
 
-        // ---------- zoom (automatic run, benchZoom "max") ----------
-        // After the game's camera update: the camera at the widest view the game allows (the limit of its own zoom-out,
-        // same formula as ZXSystem_GameLevel.OnSetCamera), around the same center. Only while input is on, so the
-        // new-game camera animation runs as usual first.
-        static void AfterSetCamera(ZXSystem_GameLevel __instance)
-        {
-            try
-            {
-                if (!_zoomMax || !DXGame.Current.InputEnabled || DXLevel.Current == null) return;
-                var pa = DXLevel.Current.PlayableArea;
-                var screen = DXScene.ScreenArea;
-                if (screen.Height <= 0 || pa.Width <= 0) return;
-                float aspect = (float)screen.Width / screen.Height;
-                float max = Math.Min(Math.Min(45f * aspect, pa.Width), pa.Width * DXScene.ScreenVirtualRatio * 0.5625f * 0.5625f * aspect);
-                var cur = __instance.Scene.CameraArea;
-                if (cur.Width <= 0 || cur.Width >= max - 0.01f) return;
-                var view = DXScreenParameters.Current.ViewArea;
-                float h = view.Width > 0 ? max * view.Height / view.Width : cur.Height * max / cur.Width;
-                float cx = cur.X + cur.Width / 2, cy = cur.Y + cur.Height / 2;
-                __instance.SetCameraArea(new System.Drawing.RectangleF(cx - max / 2, cy - h / 2, max, h));
-                if (!_zoomLogged) { _zoomLogged = true; Log.Info("bench: 자동 시험 — 줌 최대 (카메라 폭 " + cur.Width.ToString("0.0", CultureInfo.InvariantCulture) + " → " + max.ToString("0.0", CultureInfo.InvariantCulture) + ")"); }
-            }
-            catch (Exception e) { Log.Error("bench zoom", e); _zoomMax = false; }
-        }
-
-        // ---------- final swarm trigger (event thread) ----------
-        static void AfterEvents()
-        {
-            try
-            {
-                if (_pending == 0) return;
-                _pending = 0;
-                var ls = ZXLevelState.get_Current(); if (ls == null || ls.LevelEvents == null) return;
-                ZXLevelEvent fin = null;
-                foreach (var e in ls.LevelEvents) if (e != null && e.FinalSwarm) { fin = e; break; }
-                if (fin == null) { Log.Info("bench: 이 레벨에는 마지막 웨이브(FinalSwarm) 이벤트가 없다"); return; }
-                if (!fin.Created) fin.Create();
-                int before = fin.NTimesTriggered;
-                for (int i = 0; i < _factor; i++) { fin.NTimesTriggered = before; fin.Trigger(); }   // each one sized like a first trigger
-                fin.NTimesTriggered = before;   // the scheduled final swarm still comes at its time
-                int per = 0; try { per = fin.GetInfectedCount(); } catch { }
-                Log.Info("bench: 마지막 웨이브 x" + _factor + " 발생 (한 번에 약 " + per + "마리 · 생성기 " + (fin.CurrentUnitGenerators != null ? fin.CurrentUnitGenerators.Count : 0) + "곳)");
-                Row("swarm x" + _factor);
-            }
-            catch (Exception e) { Log.Error("bench swarm", e); }
-        }
+        static string _csv;
+        static string CsvPath { get { return _csv ?? Path.Combine(Log.Dir, "bench.csv"); } }
 
         // ---------- physics step timing (physics thread) ----------
         [ThreadStatic] static long _t0;
@@ -224,10 +75,11 @@ namespace Billions
         public static void Frame()
         {
             long now = Stopwatch.GetTimestamp();
-            bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0 && (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
-            if (down && !_keyDown) { _pending = 1; Log.Info("bench: Ctrl+Shift+F9 — 다음 이벤트 처리에서 마지막 웨이브 x" + _factor); }
-            _keyDown = down;
-            if (_auto) AutoFrame(now);
+            if (!_levelSeen)
+            {
+                _levelSeen = true;
+                if (_threads >= 0) try { Log.Info("bench: 물리 작업 스레드 " + _threads + " → " + PerfMod.PhysOpt(0, _threads)); } catch (Exception e) { Log.Error("bench threads", e); }
+            }
             if (_frameAt != 0) { long d = now - _frameAt; _frames++; _frameTicks += d; if (d > _frameMax) _frameMax = d; }
             _frameAt = now;
             if (_secAt == 0) { _secAt = now; return; }
@@ -251,7 +103,7 @@ namespace Billions
                     int adapt = PerfMod.PhysOpt(200, 0) == 2 ? PerfMod.PhysOpt(205, 0) : -1;
                     if (adapt >= 0) Log.Info("bench: Rapier 하위 단계 " + (adapt > 0 ? "자동 " + adapt / 100 + "~" + adapt % 100 : "고정"));
                 }
-                int zombies = 0; foreach (var z in DXGame.Current.EntitiesOfType<Zombie>()) zombies++;
+                int zombies = DXGame.Current.CountEntitiesOfType<Zombie>();
                 if (TickProf.On && note.Length == 0) try { TickProf.Frame(zombies); } catch (Exception e) { Log.Error("tickprof frame", e); }
                 long steps = 0, st = 0, sm = 0, frames = 0, ft = 0, fm = 0;
                 bool tick = note.Length == 0;   // a marker row (note) leaves the running second alone

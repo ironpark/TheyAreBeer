@@ -83,7 +83,8 @@ namespace Billions
             Step("그리기 빠른 길", () => DrawFast.Install(h));
             Step("프레임 훅", () => PerfHooks.Install(h));
             Step("성능 시험 모드", () => Bench.Install(h));
-            Step("로직 갱신 계측", () => LogicProf.Install(h));
+            // measuring hooks only while something reads them (the diagnostic recording or the tick profile)
+            if (Bench.Enabled || TickProf.On) Step("로직 갱신 계측", () => LogicProf.Install(h));
             Step("로직 틱 내부 계측", () => TickProf.Install(h));
             Log.Info("설치 끝 — 물리 DLL: " + PhysicsDll());
         }

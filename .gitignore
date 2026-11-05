@@ -1,5 +1,6 @@
 # Build script outputs (binaries, object files, and build logs)
 /mod/out/
+/bench/out/
 /native/out/
 
 # Local game and TABModLoader references (scripts\setup.ps1 downloads them into refs/)

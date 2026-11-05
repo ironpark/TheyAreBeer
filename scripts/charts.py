@@ -1,14 +1,16 @@
-# Draws the README's benchmark charts (docs/charts/*.svg) from scripts\bench.ps1 and compare.exe results.
-#   python scripts/charts.py --game <bench dir with chipmunk-1.csv, rapier-1.csv, original-1.csv>
+# Draws the benchmark charts (docs/charts/*.svg) from scripts\bench.ps1 and compare.exe results.
+#   python scripts/charts.py --game <bench dir with original-1.csv, first-1.csv, chipmunk-1.csv, rapier-1.csv (TABBench CSVs)>
 #                            [--compare <compare.txt>] [--d3d9 <rapier-1.csv> ...] [--dxvk <rapier-1.csv> ...] [--out docs/charts]
-# --d3d9 / --dxvk: runs of the same test without and with DXVK; the runs of each side are pooled per zombie bin.
+# --d3d9 / --dxvk: runs of the same test without and with DXVK (the mod's diagnostic CSVs, bench.ps1 -Diag); the runs of
+# each side are pooled per zombie bin.
 # compare.txt: lines "N=<bodies> <engine>: orig <ms> new <ms>" and "T=<threads> <engine>: orig <ms> new <ms>".
 # Plain SVG, no dependencies. Light and dark colors follow prefers-color-scheme; every point has a <title> tooltip.
 import argparse, csv, math, os, re, sys
 
-ENGINES = [('original', '원작'), ('chipmunk', 'Chipmunk 다중 코어'), ('rapier', 'Rapier')]
-# categorical slots 1-3 (validated all-pairs, light and dark); color follows the engine in every chart
-COLOR = {'original': ('#2a78d6', '#3987e5'), 'chipmunk': ('#eb6834', '#d95926'), 'rapier': ('#1baf7a', '#199e70'),
+ENGINES = [('original', '원작'), ('chipmunk', 'Chipmunk 다중 코어'), ('rapier', 'Rapier')]   # compare.exe charts
+TARGETS = [('original', '원작'), ('first', '최초 배포본'), ('chipmunk', 'Chipmunk (DXVK)'), ('rapier', 'Rapier (DXVK)')]   # game charts
+# categorical slots 1-4 in order (validated, light and dark, with direct labels); color follows the target in every chart
+COLOR = {'original': ('#2a78d6', '#3987e5'), 'chipmunk': ('#eb6834', '#d95926'), 'rapier': ('#1baf7a', '#199e70'), 'first': ('#eda100', '#c98500'),
          'd3d9': ('#898781', '#898781'), 'dxvk': ('#2a78d6', '#3987e5')}
 FONT = 'system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif'
 W, H = 1000, 360
@@ -138,21 +140,37 @@ def main():
     a = ap.parse_args()
     xt = [0, 20000, 40000, 60000, 80000, 100000]
     if a.game:
-        runs = {e: load_run(os.path.join(a.game, f'{e}-1.csv')) for e, _ in ENGINES if os.path.exists(os.path.join(a.game, f'{e}-1.csv'))}
-        c = Chart('게임 진행 속도', '실제 1초에 게임 시계가 가는 비율 (1.0 = 제 속도). 좀비 5천 마리 구간 평균', '좀비 수', '게임 시간 배율', (0, 105000), (0, 1.1))
-        for e, n in ENGINES:
-            if e in runs: c.add(e, n, binned(runs[e], 'g_clock_rate'), lambda v: f'{v:.2f}배')
+        runs = {t: load_run(os.path.join(a.game, f'{t}-1.csv')) for t, _ in TARGETS if os.path.exists(os.path.join(a.game, f'{t}-1.csv'))}
+        sub = '좀비 5천 마리 구간 평균'
+        c = Chart('게임 진행 속도', f'실제 1초에 게임 시계가 가는 비율 (1.0 = 제 속도). {sub}', '좀비 수', '게임 시간 배율', (0, 105000), (0, 1.1))
+        for t, n in TARGETS:
+            if t in runs: c.add(t, n, binned(runs[t], 'game_speed'), lambda v: f'{v:.2f}배')
         c.ref(1.0, '제 속도')
         write(a.out, 'game-speed.svg', c.svg(xt, [0, 0.25, 0.5, 0.75, 1.0], man, lambda v: f'{v:g}'))
-        c = Chart('물리 단계 시간', 'Space_Step 한 번 (로그 눈금). 1/12초를 넘으면 게임이 제 속도로 못 돈다', '좀비 수', 'ms', (0, 105000), (5, 800), ylog=True)
-        for e, n in ENGINES:
-            if e in runs: c.add(e, n, binned(runs[e], 'step_avg_ms'), lambda v: f'{v:.0f} ms')
-        c.ref(1000 / 12, '1/12초 (83 ms)')
-        write(a.out, 'step-time.svg', c.svg(xt, [10, 30, 100, 300], man, lambda v: f'{v:g}'))
-        c = Chart('프레임 시간', '한 프레임을 그리는 데 걸린 평균 시간 (카메라 최대 줌)', '좀비 수', 'ms', (0, 105000), (0, 160))
-        for e, n in ENGINES:
-            if e in runs: c.add(e, n, binned(runs[e], 'frame_avg_ms'), lambda v: f'{v:.0f} ms')
+        c = Chart('프레임 시간', f'프레임 시작에서 다음 프레임 시작까지 (측정 모드 시간 뺌). {sub}', '좀비 수', 'ms', (0, 105000), (0, 160))
+        for t, n in TARGETS:
+            if t in runs: c.add(t, n, binned(runs[t], 'frame_ms'), lambda v: f'{v:.0f} ms')
         write(a.out, 'frame-time.svg', c.svg(xt, [0, 40, 80, 120, 160], man, lambda v: f'{v:g}'))
+        c = Chart('프로세스 CPU 사용량', f'그 1초 동안 게임 프로세스 전체가 쓴 CPU 시간 (논리 코어 수). {sub}', '좀비 수', '코어', (0, 105000), (0, 24))
+        for t, n in TARGETS:
+            if t in runs: c.add(t, n, binned(runs[t], 'cpu_cores'), lambda v: f'{v:.1f}코어')
+        write(a.out, 'cpu-cores.svg', c.svg(xt, [0, 6, 12, 18, 24], man, lambda v: f'{v:g}'))
+        # zombies against real time since the swarm: how long each target takes to reach the end of the test
+        full = {t: list(csv.DictReader(open(os.path.join(a.game, f'{t}-1.csv'), encoding='utf-8-sig'))) for t in runs}
+        tmax = 0; series = {}
+        for t, rows in full.items():
+            t0 = next((float(r['t_s']) for r in rows if 'swarm' in (r.get('note') or '')), None)
+            if t0 is None: continue
+            pts = [(float(r['t_s']) - t0, int(r['zombies'])) for r in rows if float(r['t_s']) >= t0]
+            step = max(1, len(pts) // 120)   # about 120 points a line
+            pts = pts[::step] + ([pts[-1]] if (len(pts) - 1) % step else [])
+            series[t] = [(x, y, f'{x:.0f}초') for x, y in pts]; tmax = max(tmax, pts[-1][0])
+        xm = max(60, math.ceil(tmax / 60) * 60)
+        c = Chart('좀비 수가 늘어나는 속도', '웨이브 발생부터 실제 경과 시간. 게임이 빨리 진행될수록 좀비가 빨리 늘어 10만 마리에 일찍 닿는다', '실제 경과 시간 (초)', '좀비 수', (0, xm), (0, 105000))
+        for t, n in TARGETS:
+            if t in series: c.add(t, n, series[t], lambda v: f'{v:,.0f}마리')
+        step = 60 if xm <= 600 else 300 if xm <= 3000 else 600
+        write(a.out, 'zombies-time.svg', c.svg(list(range(0, xm + 1, step)), [0, 20000, 40000, 60000, 80000, 100000], lambda v: f'{v:g}', man))
     if a.compare:
         res = {}
         for line in open(a.compare, encoding='utf-8'):

@@ -1,123 +1,218 @@
-# Run the mod's automatic in-game benchmark for one or more physics engines and summarize the results.
-#   powershell -ExecutionPolicy Bypass -File scripts\bench.ps1 [-Engine chipmunk,rapier,original] [-Runs 1] [-Seconds 120]
-#     [-Factor 4] [-Delay 5] [-Seed 20261104] [-Threads -1] [-Zoom max|off] [-Counters] [-OutDir <folder>] [-GameDir <folder>]
+# In-game benchmark: the same fixed scenario on the unmodded game, the first release of the mod and the current mod.
+#   powershell -ExecutionPolicy Bypass -File scripts\bench.ps1 [-Target original,first,chipmunk,rapier] [-Dxvk] [-Zombies 100000]
+#     [-OriginalZombies 20000] [-Runs 1] [-Factor 4] [-Delay 5] [-Seed 20261104] [-Timeout 3600] [-Zoom max|off] [-Diag] [-Threads -1] [-Counters]
+#     [-OutDir <folder>] [-GameDir <folder>]
 #
-# Each run starts the game with the TABPERF_* environment variables below (they win over engine.json), so engine.json is
-# left alone. The mod then starts a fixed survival game (seed -Seed), zooms out as far as the game allows (-Zoom max),
-# turns damage off and triggers the final swarm -Factor times after -Delay seconds, writes one CSV row per second
-# for -Seconds seconds, and quits the game.
-#   TABPERF_BENCH=1 TABPERF_BENCH_AUTO=1 TABPERF_ENGINE TABPERF_BENCH_SECONDS TABPERF_BENCH_DELAY TABPERF_BENCH_FACTOR
-#   TABPERF_BENCH_SEED TABPERF_BENCH_THREADS TABPERF_BENCH_ZOOM TABPERF_BENCH_CSV
-# -Counters also sets DX_RAPIER_COUNTERS=1: Rapier runs add its own stage times (rs_* columns); they cost about 7% of the
-# step, so leave them off when comparing step times.
-# Results: <OutDir>\<engine>-<run>.csv (one per run) and summary.csv; default OutDir bench-out\<date-time> in the repo.
+# Targets:
+#   original  the game with no optimization mod (Mods\TABPerf moved out of the Mods folder for the run)
+#   first     the first release of the mod (commit ef035e1): its TABPerf.dll in Mods\TABPerf and its multi-core Chipmunk
+#             DXPhysicsNative.dll in the game folder, as its install script did (the game's DLL is put back afterwards).
+#             Built once from git into native\out\first-release.
+#   chipmunk  the current mod, Chipmunk multi-core engine (the installed Mods\TABPerf)
+#   rapier    the current mod, Rapier engine
+# -Dxvk runs chipmunk and rapier with DXVK (the original and the first release cannot load it).
 #
-# Needs the mod installed (scripts\install.ps1) and Steam running. The game normally restarts itself through Steam,
-# which would drop the environment variables; a steam_appid.txt in the game folder makes it run directly. The script
-# creates that file for the runs and removes it afterwards (a steam_appid.txt that was already there is kept).
+# Every run uses the same measuring mod, TABBench (bench\out, scripts\build.ps1 -Target bench), installed into
+# Mods\TABBench for the runs only: it starts a fixed survival game (seed -Seed) zoomed out as far as the game allows,
+# turns damage off and triggers the final swarm -Factor times -Delay seconds into the level, writes one CSV row per
+# second and quits the game once -Zombies zombies are alive (-OriginalZombies for the unmodded game, which gets
+# very slow with many zombies), or after -Timeout seconds. See bench\TABBench.cs for what
+# is measured and how its own work is kept out of the frame times.
+# -Diag also turns on the current mod's diagnostic recording (<target>-diag-<run>.csv, docs\BENCH.md); it adds timers
+# on hot paths, so the main CSV of such a run is not comparable. -Threads / -Counters only apply with -Diag.
+# -Terrain counts the zombies standing on inaccessible map cells (water, cliffs) every second (zombies_in_terrain); it
+# walks every zombie under the logic lock, so use it for correctness runs, not timing runs.
+#
+# Results: <OutDir>\<target>-<run>.csv and summary.csv; default OutDir bench-out\<date-time> in the repo.
+# Needs the current mod installed (scripts\install.ps1) and Steam running. The game normally restarts itself through
+# Steam, which would drop the environment variables; a steam_appid.txt in the game folder makes it run directly. The
+# script creates that file for the runs and removes it afterwards (one that was already there is kept). Everything the
+# script changes in the game folder is put back at the end, also when a run fails.
 param(
-  [string[]]$Engine = @('chipmunk', 'rapier'),
+  [string[]]$Target = @('original', 'first', 'chipmunk', 'rapier'),
+  [switch]$Dxvk,
+  [int]$Zombies = 100000,
+  [int]$OriginalZombies = 20000,
   [int]$Runs = 1,
-  [int]$Seconds = 120,
   [int]$Factor = 4,
   [int]$Delay = 5,
   [int]$Seed = 20261104,
-  [int]$Threads = -1,
+  [int]$Timeout = 3600,
   [ValidateSet('max', 'off')][string]$Zoom = 'max',
+  [switch]$Diag,
+  [switch]$Terrain,
+  [int]$Threads = -1,
   [switch]$Counters,
   [string]$OutDir = '',
   [string]$GameDir = ''
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\game.ps1')
+$repo = Split-Path -Parent $PSScriptRoot
+$FirstCommit = 'ef035e1'
 
-# -File passes "-Engine a,b" as one string: split it here
-$Engine = @($Engine | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
-$known = 'chipmunk', 'rapier', 'original'
-foreach ($e in $Engine) { if ($known -notcontains $e) { throw "Unknown -Engine $e (use $($known -join ', '))" } }
+# -File passes "-Target a,b" as one string: split it here
+$Target = @($Target | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+$known = 'original', 'first', 'chipmunk', 'rapier'
+foreach ($t in $Target) { if ($known -notcontains $t) { throw "Unknown -Target $t (use $($known -join ', '))" } }
 if ($Runs -lt 1) { throw '-Runs must be 1 or more' }
-if ($Seconds -lt 30) { throw '-Seconds must be 30 or more (the mod runs at least 30 s)' }
 
 $GameDir = Resolve-GameDir $GameDir
 $exe = Join-Path $GameDir $TabExe
-$mod = Join-Path $GameDir 'Mods\TABPerf'
+$mods = Join-Path $GameDir 'Mods'
+$mod = Join-Path $mods 'TABPerf'
+$benchMod = Join-Path $mods 'TABBench'
+$saved = Join-Path $GameDir 'TABPerf.bench-saved'          # the installed mod while original / first run
+$gameDll = Join-Path $GameDir 'DXPhysicsNative.dll'
+$gameDllSaved = Join-Path $GameDir 'DXPhysicsNative.dll.bench-saved'
+$benchOut = Join-Path $repo 'bench\out'
+foreach ($p in $saved, $gameDllSaved, $benchMod) { if (Test-Path $p) { throw "$p is left from an interrupted benchmark - put it back (or remove it) first" } }
+if (-not (Test-Path (Join-Path $benchOut 'TABBench.dll'))) { throw 'TABBench is not built - run scripts\build.ps1 -Target bench' }
 if (-not (Test-Path (Join-Path $mod 'TABPerf.dll'))) { throw "TABPerf is not installed in $mod - run scripts\install.ps1 first" }
-foreach ($e in $Engine) {
-  if ($e -ne 'original' -and -not (Test-Path (Join-Path $mod "$e\DXPhysicsNative.dll"))) { throw "Engine $e is not installed in $mod\$e - run scripts\build.ps1 -Target $e, then scripts\install.ps1" }
+foreach ($e in 'chipmunk', 'rapier') {
+  if ($Target -contains $e -and -not (Test-Path (Join-Path $mod "$e\DXPhysicsNative.dll"))) { throw "Engine $e is not installed in $mod\$e - run scripts\build.ps1 -Target $e, then scripts\install.ps1" }
 }
 if (Get-Process ($TabExe -replace '\.exe$', '') -ErrorAction SilentlyContinue) { throw 'The game is already running - close it first.' }
 if (-not (Get-Process steam -ErrorAction SilentlyContinue)) { Write-Warning 'Steam does not seem to be running; the game needs it to start.' }
 
-$repo = Split-Path -Parent $PSScriptRoot
+# DXVK for the current mod: the installed one, else the copy install.ps1 downloaded (put in for the runs only)
+$dxvkDir = Join-Path $mod 'dxvk'; $dxvkAdded = $false
+if ($Dxvk -and ($Target -contains 'chipmunk' -or $Target -contains 'rapier') -and -not (Test-Path (Join-Path $dxvkDir 'd3d9.dll'))) {
+  $d = Join-Path $repo 'native\out\dxvk\d3d9.dll'
+  if (-not (Test-Path $d)) { throw 'DXVK is not available - run scripts\install.ps1 -Dxvk on once (it downloads it), or leave -Dxvk out' }
+}
+
+# The first release, built once from its commit (its own build scripts) into native\out\first-release
+function Get-FirstRelease {
+  $dir = Join-Path $repo 'native\out\first-release'
+  $files = 'TABPerf.dll', 'ModInfos.json', 'DXPhysicsNative.dll'
+  if (@($files | Where-Object { -not (Test-Path (Join-Path $dir $_)) }).Count -eq 0) { return $dir }
+  $refs = Join-Path $repo 'refs'
+  $src = Join-Path $repo 'native\out\first-release-src'
+  Write-Host "Building the first release ($FirstCommit) into $dir"
+  if (Test-Path $src) { git -C $repo worktree remove --force $src 2>$null; Remove-Item -Recurse -Force $src -ErrorAction SilentlyContinue }
+  git -C $repo worktree add --detach $src $FirstCommit | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "git worktree add $FirstCommit failed" }
+  try {
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $src 'build-native.ps1') | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'first release: physics DLL build failed' }
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $src 'build-mod.ps1') -RefDir $refs | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'first release: mod build failed' }
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    Copy-Item (Join-Path $src 'mod\out\TABPerf.dll'), (Join-Path $src 'mod\out\ModInfos.json'), (Join-Path $src 'native\out\DXPhysicsNative.dll') $dir -Force
+  }
+  finally { git -C $repo worktree remove --force $src | Out-Null }
+  return $dir
+}
+$first = if ($Target -contains 'first') { Get-FirstRelease } else { $null }
+
 if (-not $OutDir) { $OutDir = Join-Path $repo ('bench-out\' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 
-$vars = 'TABPERF_BENCH', 'TABPERF_BENCH_AUTO', 'TABPERF_ENGINE', 'TABPERF_BENCH_SECONDS', 'TABPERF_BENCH_DELAY', 'TABPERF_BENCH_FACTOR',
-        'TABPERF_BENCH_SEED', 'TABPERF_BENCH_THREADS', 'TABPERF_BENCH_ZOOM', 'TABPERF_BENCH_CSV', 'DX_RAPIER_COUNTERS'
-# Loading the level takes a while: allow -Delay + -Seconds plus 5 minutes before giving up on a run.
-$timeout = $Delay + $Seconds + 300
+$vars = 'TABBENCH_CSV', 'TABBENCH_AUTO', 'TABBENCH_SEED', 'TABBENCH_DELAY', 'TABBENCH_FACTOR', 'TABBENCH_ZOMBIES', 'TABBENCH_TIMEOUT', 'TABBENCH_ZOOM', 'TABBENCH_TERRAIN',
+        'TABPERF_ENGINE', 'TABPERF_DXVK', 'TABPERF_BENCH', 'TABPERF_BENCH_CSV', 'TABPERF_BENCH_THREADS', 'DX_RAPIER_COUNTERS'
 
-# CSV rows of one run -> summary numbers (seconds with physics steps, not paused, no marker note).
-function Summarize($csv, $engineName, $run) {
-  $rows = @(Import-Csv $csv | Where-Object { $_.note -eq '' -and $_.paused -eq '0' -and [int]$_.phys_steps -gt 0 })
-  if (-not $rows.Count) { return $null }
-  $inv = [Globalization.CultureInfo]::InvariantCulture
-  function Avg($set, $col) { $v = @($set | ForEach-Object { [double]::Parse($_.$col, $inv) }); if ($v.Count) { ($v | Measure-Object -Average).Average } else { 0 } }
-  $last = @($rows | Select-Object -Last 30)   # the heaviest part: the crowd only grows (damage is off)
-  $o = [ordered]@{
-    engine = $engineName; run = $run; dll = $rows[0].engine; seconds = $rows.Count
-    zombies_max = ($rows | ForEach-Object { [int]$_.zombies } | Measure-Object -Maximum).Maximum
-    step_ms = [math]::Round((Avg $rows 'step_avg_ms'), 2); frame_ms = [math]::Round((Avg $rows 'frame_avg_ms'), 2)
-    last30_zombies = [math]::Round((Avg $last 'zombies'), 0)
-    last30_step_ms = [math]::Round((Avg $last 'step_avg_ms'), 2); last30_frame_ms = [math]::Round((Avg $last 'frame_avg_ms'), 2)
-    last30_steps_per_s = [math]::Round((Avg $last 'phys_steps'), 1)
+# Game folder state for one target; Restore-Game puts everything back.
+function Set-Game($t) {
+  $wantCurrent = $t -eq 'chipmunk' -or $t -eq 'rapier'
+  if ($wantCurrent) {
+    if (Test-Path $saved) { if (Test-Path $mod) { Remove-Item -Recurse -Force $mod }; Move-Item $saved $mod }
   }
-  # step sections (r_*, Rapier only), Rapier's own stage counters (rs_*) and the game's work around the step (g_*), last 30 s
-  foreach ($col in $rows[0].PSObject.Properties.Name | Where-Object { $_ -match '^(rs?|g|n|l)_' }) {
-    $set = @($last | Where-Object { $_.$col -ne '' })
-    if ($set.Count) { $o["last30_$col"] = [math]::Round((Avg $set $col), 2) }
+  elseif (-not (Test-Path $saved)) { Move-Item $mod $saved }
+  elseif (Test-Path $mod) { Remove-Item -Recurse -Force $mod }   # the first release's folder from the previous run
+  if ($t -eq 'first') {
+    New-Item -ItemType Directory -Force $mod | Out-Null
+    Copy-Item (Join-Path $first 'TABPerf.dll'), (Join-Path $first 'ModInfos.json') $mod -Force
+    if (-not (Test-Path $gameDllSaved)) { Copy-Item $gameDll $gameDllSaved }
+    Copy-Item (Join-Path $first 'DXPhysicsNative.dll') $gameDll -Force
   }
-  [pscustomobject]$o
+  elseif (Test-Path $gameDllSaved) { Copy-Item $gameDllSaved $gameDll -Force; Remove-Item $gameDllSaved }
+  if ($wantCurrent -and $Dxvk -and -not (Test-Path (Join-Path $dxvkDir 'd3d9.dll'))) {
+    New-Item -ItemType Directory -Force $dxvkDir | Out-Null
+    Copy-Item (Join-Path $repo 'native\out\dxvk\d3d9.dll') $dxvkDir; $script:dxvkAdded = $true
+  }
+}
+function Restore-Game {
+  if (Test-Path $saved) { if (Test-Path $mod) { Remove-Item -Recurse -Force $mod }; Move-Item $saved $mod }
+  if (Test-Path $gameDllSaved) { Copy-Item $gameDllSaved $gameDll -Force; Remove-Item $gameDllSaved }
+  if ($dxvkAdded) { Remove-Item -Recurse -Force $dxvkDir -ErrorAction SilentlyContinue }
+  if (Test-Path $benchMod) { Remove-Item -Recurse -Force $benchMod }
 }
 
+# CSV rows of one run -> summary numbers
+function Summarize($csv, $t, $run) {
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  $rows = @(Import-Csv $csv)
+  if (-not $rows.Count) { return $null }
+  $swarm = @($rows | Where-Object { $_.note -like 'swarm*' } | Select-Object -First 1)
+  $t0 = if ($swarm.Count) { [double]::Parse($swarm[0].t_s, $inv) } else { 0 }
+  $last = $rows[-1]
+  $live = @($rows | Where-Object { $_.paused -eq '0' -and [int]$_.frames -gt 0 })
+  function Avg($set, $col) { $v = @($set | ForEach-Object { [double]::Parse($_.$col, $inv) }); if ($v.Count) { ($v | Measure-Object -Average).Average } else { 0 } }
+  $heavy = @($live | Where-Object { [int]$_.zombies -ge 90000 })
+  [pscustomobject][ordered]@{
+    target = $t; dxvk = [bool]($Dxvk -and ($t -eq 'chipmunk' -or $t -eq 'rapier')); run = $run
+    end = $last.note; zombies_max = ($rows | ForEach-Object { [int]$_.zombies } | Measure-Object -Maximum).Maximum
+    real_s = [math]::Round([double]::Parse($last.t_s, $inv) - $t0, 0)      # from the swarm to the end of the run
+    game_s = [math]::Round([double]::Parse($last.game_time_s, $inv) - $(if ($swarm.Count) { [double]::Parse($swarm[0].game_time_s, $inv) } else { 0 }), 0)
+    speed_90k = [math]::Round((Avg $heavy 'game_speed'), 3); frame_ms_90k = [math]::Round((Avg $heavy 'frame_ms'), 1)
+    logic_wait_ms_90k = [math]::Round((Avg $heavy 'logic_wait_ms'), 1); cpu_cores_90k = [math]::Round((Avg $heavy 'cpu_cores'), 1)
+    bench_ms_per_s = [math]::Round((Avg $live 'bench_ms'), 3)
+  }
+}
+
+$gameDllHash = Hash $gameDll
 $createdAppId = $false
 $appId = Join-Path $GameDir 'steam_appid.txt'
 $results = @()
 try {
   if (-not (Test-Path $appId)) { [IO.File]::WriteAllText($appId, "$TabSteamAppId"); $createdAppId = $true }
-  $env:TABPERF_BENCH = '1'; $env:TABPERF_BENCH_AUTO = '1'
-  $env:TABPERF_BENCH_SECONDS = "$Seconds"; $env:TABPERF_BENCH_DELAY = "$Delay"; $env:TABPERF_BENCH_FACTOR = "$Factor"
-  $env:TABPERF_BENCH_SEED = "$Seed"; $env:TABPERF_BENCH_THREADS = "$Threads"; $env:TABPERF_BENCH_ZOOM = $Zoom
-  if ($Counters) { $env:DX_RAPIER_COUNTERS = '1' }
+  New-Item -ItemType Directory -Force $benchMod | Out-Null
+  Copy-Item (Join-Path $benchOut 'TABBench.dll'), (Join-Path $benchOut 'ModInfos.json') $benchMod -Force
+  $env:TABBENCH_AUTO = '1'; $env:TABBENCH_SEED = "$Seed"; $env:TABBENCH_DELAY = "$Delay"; $env:TABBENCH_FACTOR = "$Factor"
+  $env:TABBENCH_ZOMBIES = "$Zombies"; $env:TABBENCH_TIMEOUT = "$Timeout"; $env:TABBENCH_ZOOM = $Zoom
+  if ($Terrain) { $env:TABBENCH_TERRAIN = '1' }
   for ($r = 1; $r -le $Runs; $r++) {
-    foreach ($e in $Engine) {
-      $csv = Join-Path $OutDir "$e-$r.csv"
+    foreach ($t in $Target) {
+      Set-Game $t
+      $csv = Join-Path $OutDir "$t-$r.csv"
       Remove-Item $csv -ErrorAction SilentlyContinue
-      $env:TABPERF_ENGINE = $e; $env:TABPERF_BENCH_CSV = $csv
-      Write-Host "[$e run $r/$Runs] starting the game (about $($Delay + $Seconds) s after the level loads)..."
-      $p = Start-Process -FilePath $exe -WorkingDirectory $GameDir -PassThru
-      if (-not $p.WaitForExit($timeout * 1000)) {
-        Write-Warning "[$e run $r] no exit after $timeout s - stopping the game"
-        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+      $env:TABBENCH_CSV = $csv
+      $env:TABBENCH_ZOMBIES = $(if ($t -eq 'original') { "$OriginalZombies" } else { "$Zombies" })
+      foreach ($v in 'TABPERF_ENGINE', 'TABPERF_DXVK', 'TABPERF_BENCH', 'TABPERF_BENCH_CSV', 'TABPERF_BENCH_THREADS', 'DX_RAPIER_COUNTERS') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+      if ($t -eq 'chipmunk' -or $t -eq 'rapier') {
+        $env:TABPERF_ENGINE = $t; $env:TABPERF_DXVK = $(if ($Dxvk) { '1' } else { '0' })
+        if ($Diag) {
+          $env:TABPERF_BENCH = '1'; $env:TABPERF_BENCH_CSV = Join-Path $OutDir "$t-diag-$r.csv"; $env:TABPERF_BENCH_THREADS = "$Threads"
+          if ($Counters) { $env:DX_RAPIER_COUNTERS = '1' }
+        }
       }
-      if (-not (Test-Path $csv)) { Write-Warning "[$e run $r] no results ($csv) - see %APPDATA%\TABPerf\billions.log"; continue }
-      $s = Summarize $csv $e $r
-      if (-not $s) { Write-Warning "[$e run $r] the CSV has no measured seconds"; continue }
+      Write-Host "[$t run $r/$Runs] $(Get-Date -Format 'HH:mm:ss') starting the game (until $Zombies zombies or $Timeout s)..."
+      $p = Start-Process -FilePath $exe -WorkingDirectory $GameDir -PassThru
+      if (-not $p.WaitForExit(($Timeout + 600) * 1000)) {
+        Write-Warning "[$t run $r] no exit - stopping the game"
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; $p.WaitForExit(30000) | Out-Null
+      }
+      Start-Sleep -Seconds 3   # let the game release its files before the next swap
+      if (-not (Test-Path $csv)) { Write-Warning "[$t run $r] no results ($csv) - see %APPDATA%\TABPerf\tabbench.log"; continue }
+      $s = Summarize $csv $t $r
+      if (-not $s) { Write-Warning "[$t run $r] the CSV is empty"; continue }
       $results += $s
-      Write-Host ("[$e run $r] {0}: up to {1} zombies, step {2} ms, last 30 s: {3} zombies, step {4} ms, frame {5} ms" -f $s.dll, $s.zombies_max, $s.step_ms, $s.last30_zombies, $s.last30_step_ms, $s.last30_frame_ms)
+      Write-Host ("[$t run $r] {0}: {1} zombies after {2} s (game {3} s); at 90k+: speed {4}, frame {5} ms (logic wait {6} ms)" -f $s.end, $s.zombies_max, $s.real_s, $s.game_s, $s.speed_90k, $s.frame_ms_90k, $s.logic_wait_ms_90k)
     }
   }
 }
 finally {
   foreach ($v in $vars) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+  Restore-Game
+  if ((Hash $gameDll) -ne $gameDllHash) { Write-Warning "The game folder's DXPhysicsNative.dll differs from before the runs - check $gameDll" }
   if ($createdAppId) { Remove-Item $appId -ErrorAction SilentlyContinue }
 }
 
-if (-not $results.Count) { throw "No run produced results (see %APPDATA%\TABPerf\billions.log)" }
+if (-not $results.Count) { throw 'No run produced results (see %APPDATA%\TABPerf\tabbench.log)' }
 $summary = Join-Path $OutDir 'summary.csv'
-$cols = @($results | ForEach-Object { $_.PSObject.Properties.Name } | Select-Object -Unique)   # Rapier runs add columns
-$results | Select-Object $cols | Export-Csv $summary -NoTypeInformation -Encoding UTF8
+$results | Export-Csv $summary -NoTypeInformation -Encoding UTF8
 ''
-$results | Format-Table engine, run, zombies_max, step_ms, frame_ms, last30_zombies, last30_step_ms, last30_frame_ms, last30_steps_per_s -AutoSize | Out-String | Write-Host
-Write-Host "Results: $OutDir (summary.csv, <engine>-<run>.csv)"
+$results | Format-Table target, dxvk, run, end, zombies_max, real_s, game_s, speed_90k, frame_ms_90k, logic_wait_ms_90k, cpu_cores_90k -AutoSize | Out-String | Write-Host
+Write-Host "Results: $OutDir (summary.csv, <target>-<run>.csv). Charts: python scripts\charts.py --game $OutDir"

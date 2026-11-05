@@ -1,5 +1,5 @@
 # Build TABPerf: the physics engines and the engine mod.
-#   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 [-Target all|chipmunk|harness|rapier|mod[,...]] [-RefDir <folder>] [-Csc <csc.exe>]
+#   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 [-Target all|chipmunk|harness|rapier|mod|bench[,...]] [-RefDir <folder>] [-Csc <csc.exe>]
 #
 # Targets (built in this order; default all):
 #   chipmunk  native\out\DXPhysicsNative.dll          multi-core Chipmunk 7.0.0 physics (MSVC x64)
@@ -8,13 +8,14 @@
 #             (needs CMake 3.25+, git and rustup; "all" skips it with a warning when they are missing)
 #   mod       mod\out\TABPerf.dll, ModInfos.json      the engine mod (Roslyn C#); needs the TABModLoader references in
 #             -RefDir (default <repo>\refs, filled by scripts\setup.ps1)
+#   bench     bench\out\TABBench.dll, ModInfos.json   the benchmark mod that scripts\bench.ps1 installs for its runs (same references)
 # Needs Visual Studio 2019/2022 or Build Tools with "Desktop development with C++" (MSVC x64) and MSBuild.
 # Then: scripts\install.ps1 puts the result into the game's Mods folder.
 param([string[]]$Target = 'all', [string]$RefDir = '', [string]$Csc = '')
 $ErrorActionPreference = 'Stop'
 # -File passes "-Target a,b" as one string: split it here
 $Target = @($Target | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
-$known = 'all', 'chipmunk', 'harness', 'rapier', 'mod'
+$known = 'all', 'chipmunk', 'harness', 'rapier', 'mod', 'bench'
 foreach ($t in $Target) { if ($known -notcontains $t) { throw "Unknown -Target $t (use $($known -join ', '))" } }
 . (Join-Path $PSScriptRoot 'lib\toolchain.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
@@ -142,24 +143,24 @@ function Build-Rapier {
   foreach ($b in $built) { Write-Host "OK: $($b.dll)  (official CMake build: $opts, fat LTO; $($b.what); $($b.tests))" }
 }
 
-# ---------- mod: TABPerf.dll ----------
+# ---------- mod: TABPerf.dll, bench: TABBench.dll ----------
 # The references come from TABModLoader: TheyAreBillions.exe (the patched game executable - it contains the game and
 # loader types) and DXVision.dll, 0Harmony.dll (the loader's Lib folder). .NET Framework 4.7.2+.
-function Build-Mod {
+function Build-Mod([string]$folder = 'mod', [string]$name = 'TABPerf', [string]$define = 'PERFMOD') {
   if (-not $RefDir) { $script:RefDir = Join-Path $repo 'refs' }
   $refFiles = 'TheyAreBillions.exe', 'DXVision.dll', '0Harmony.dll'
   foreach ($f in $refFiles) { if (-not (Test-Path (Join-Path $RefDir $f))) { throw "Missing $f in $RefDir - run scripts\setup.ps1 or pass -RefDir" } }
   $compiler = if ($Csc) { if (-not (Test-Path $Csc)) { throw "-Csc not found: $Csc" }; $Csc } else { Get-Csc }
-  $here = Join-Path $repo 'mod'; $out = Join-Path $here 'out'; New-Item -ItemType Directory -Force $out | Out-Null
+  $here = Join-Path $repo $folder; $out = Join-Path $here 'out'; New-Item -ItemType Directory -Force $out | Out-Null
   $fw = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
   $refs = @('System.dll', 'System.Core.dll', 'System.Drawing.dll', 'System.Windows.Forms.dll', 'System.Numerics.dll' | ForEach-Object { '-r:"' + (Join-Path $fw $_) + '"' })
   $refs += $refFiles | ForEach-Object { '-r:"' + (Join-Path $RefDir $_) + '"' }
   $src = Get-ChildItem $here -Filter *.cs -Recurse | Where-Object { $_.FullName -notlike "$out\*" } | ForEach-Object { '"' + $_.FullName + '"' }
-  $cscArgs = @('-nologo', '-target:library', '-langversion:7.3', '-optimize+', '-deterministic', '-unsafe+', '-nowarn:1701,1702,0169', '-define:PERFMOD', "-out:`"$out\TABPerf.dll`"") + $refs + $src
+  $cscArgs = @('-nologo', '-target:library', '-langversion:7.3', '-optimize+', '-deterministic', '-unsafe+', '-nowarn:1701,1702,0169', "-define:$define", "-out:`"$out\$name.dll`"") + $refs + $src
   & $compiler @cscArgs
-  if ($LASTEXITCODE -ne 0) { throw 'Mod build failed' }
+  if ($LASTEXITCODE -ne 0) { throw "$name build failed" }
   Copy-Item (Join-Path $here 'ModInfos.json') $out -Force
-  Write-Host "OK: $out\TABPerf.dll"
+  Write-Host "OK: $out\$name.dll"
 }
 
 # ---------- run ----------
@@ -176,4 +177,5 @@ if (Wanted 'rapier') {
   else { throw 'Rapier needs git, cmake and rustup.' }
 }
 if (Wanted 'mod') { Build-Mod }
+if (Wanted 'bench') { Build-Mod 'bench' 'TABBench' 'TABBENCH' }
 Write-Host 'Next: scripts\install.ps1 [-Engine chipmunk|rapier]'

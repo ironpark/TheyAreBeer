@@ -67,7 +67,10 @@ $rapierRev = '475caa3ff4646fd9a796b67d14116256f4962bc7'   # Rapier C bindings 0.
 $rapierToolchain = '1.99.1'                                 # bindings/c needs Rust 1.99
 $rapierBuildId = '1'                                        # bump when the rapier2d_ffi build steps below change (rebuilds reused builds)
 # CMake options; RAPIER_DIM2 / RAPIER_F32 / RAPIER_PARALLEL on the C side must match them (the guide's consumer defines).
-$rapierOptions = [ordered]@{ 'RAPIER_DIMENSION:STRING' = '2'; 'RAPIER_PRECISION:STRING' = '32'; 'RAPIER_ENABLE_PARALLEL:BOOL' = 'ON'; 'RAPIER_SIMD_LANES:STRING' = '8'; 'RAPIER_FEATURES:STRING' = 'profiler' }
+# RAPIER_TARGET: an explicit Rust target makes Cargo apply RUSTFLAGS (the CPU level below) only to the library; build
+# scripts and proc macros, which run on the build machine, stay baseline (without it the AVX-512 build's build scripts
+# die with STATUS_ILLEGAL_INSTRUCTION on a CPU without AVX-512, such as some CI runners).
+$rapierOptions = [ordered]@{ 'RAPIER_DIMENSION:STRING' = '2'; 'RAPIER_PRECISION:STRING' = '32'; 'RAPIER_ENABLE_PARALLEL:BOOL' = 'ON'; 'RAPIER_SIMD_LANES:STRING' = '8'; 'RAPIER_FEATURES:STRING' = 'profiler'; 'RAPIER_TARGET:STRING' = 'x86_64-pc-windows-msvc' }
 # The same CMake build once per CPU level. DXPhysicsNative.dll picks the highest one the CPU and OS support (CPUID/XGETBV).
 # pf = IsProcessorFeaturePresent id that decides whether the tests can run here.
 #   rapier2d_ffi.dll         baseline x86-64 (SSE2): runs on any x64 CPU

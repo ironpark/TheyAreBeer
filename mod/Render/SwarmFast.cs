@@ -15,7 +15,7 @@ namespace Billions
     // the whole unit list twice - drop the dead (CLife.IsAlive), then sum Unit.Cell - which with a wave of 100,000 is
     // about 10 ms per frame of pointer chasing through managed objects.
     //
-    // With the Rapier replacement, the wave's physics bodies go into a native body group (DX_GroupNew / Add / Cells): the
+    // With the Rapier or Chipmunk2DVulkan replacement, the wave's physics bodies go into a native body group (DX_GroupNew / Add / Cells): the
     // DLL keeps the records, takes disposed bodies out by itself, and sums the cells of the members whose category is
     // not 0 (CLife clears a unit's body category the moment it dies) in one pass over native memory. Each Update then
     // sets the icon from that sum, every call as before. The game's own Update still runs:
@@ -52,7 +52,7 @@ namespace Billions
         public static void Install(Harmony h)
         {
             if (!Settings.Switch("TABPERF_SWARMFAST", true)) { Log.Info("swarm: TABPERF_SWARMFAST 끔 — 원작 그대로"); return; }
-            if (PhysicsRedirect.Module == IntPtr.Zero || PerfMod.PhysOpt(200, 0) != 2) { Log.Info("swarm: Rapier 대체본이 아님 — 원작 그대로"); return; }
+            if (PhysicsRedirect.Module == IntPtr.Zero) { Log.Info("swarm: 물리 대체본이 없음 — 원작 그대로"); return; }
             _new = PhysicsRedirect.Proc<NewFn>("DX_GroupNew"); _free = PhysicsRedirect.Proc<FreeFn>("DX_GroupFree");
             _add = PhysicsRedirect.Proc<AddFn>("DX_GroupAdd"); _cells = PhysicsRedirect.Proc<CellsFn>("DX_GroupCells");
             if (_new == null || _free == null || _add == null || _cells == null) { Log.Info("swarm: 물리 DLL 에 몸체 묶음 함수가 없다 — 원작 그대로"); return; }

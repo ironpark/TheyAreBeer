@@ -16,8 +16,10 @@ typedef struct { uint32_t a, b, ga, gb, contact, pad[3]; } CvkCbPair;           
 enum { CVK_BT_NONE = 0, CVK_BT_DYNAMIC = 1, CVK_BT_KINEMATIC = 2, CVK_BT_STATIC = 3, CVK_BF_FRESH = 4 };
 enum { CVK_SK_CIRCLE = 1, CVK_SK_BOX = 2, CVK_SF_SENSOR = 4, CVK_SF_CB_SHIFT = 3 };
 #define CVK_NO_CONTACT 0xFFFFFFFFu
-#define CVK_CONTACT_BYTES 112   // cpvk.comp struct Contact
-#define CVK_NCOLORS 32       // contact colours of the Gauss-Seidel passes (cpvk.comp NCOLORS)
+#define CVK_CONTACT_BYTES 80    // cpvk.comp struct Contact
+#define CVK_SCONTACT_BYTES 96   // cpvk.comp struct SContact
+#define CVK_NCOLORS 64       // contact colours of the Gauss-Seidel passes (cpvk.comp NCOLORS)
+#define CVK_GS_MIN 8         // colours always solved as Gauss-Seidel (the rest may go to the Jacobi pass)
 
 static inline uint32_t cvk_hash3(int x, int y, int l) { return ((uint32_t)x * 73856093u) ^ ((uint32_t)y * 19349663u) ^ ((uint32_t)l * 83492791u); }
 #define CVK_STATIC_SALT 85   // cpvk.comp STATIC_SALT
@@ -30,16 +32,19 @@ typedef struct CvkFrame {
 	uint32_t nBodies, nShapes, nShapePatches;
 	uint32_t hs, nStaticItems, nStaticRecs;          // static grid: buckets (power of two, 0 = none), items, records
 	uint32_t iterations;
+	uint32_t jacobiMax;                               // colours (after the first CVK_GS_MIN) of at most this many contacts go to the Jacobi pass
 	float dt, damping, biasCoef, slop, dtCoef, gx, gy, cell0, scell;
 	// upload pointers (cvk_reserve1)
 	CvkBody *bodies; CvkShapePatch *shapePatches; uint32_t *staticStart; uint32_t *staticItems; CvkStaticRec *staticRecs;
 	// phase 1 results
 	uint32_t nContacts, nCb; const CvkCbPair *cb;
-	uint32_t nColors, nUncolored;                     // colours used, contacts left to the Jacobi pass
+	uint32_t nColors, nUncolored, maxDegree;          // colours used, contacts without a colour, most contacts on one body
+	// the dynamic grid for queries: entries (shape per entry) and the shape boxes, read back with phase 1
+	uint32_t nEntries; const uint32_t *eshape; const float *sbb;
 	// phase 2 inputs and upload pointers (cvk_reserve2)
 	uint32_t nDisable, nBodyPatches; uint32_t *disable; CvkBodyPatch *bodyPatches;
-	// phase 2 results: bodies (8 floats each: p, v, a, w, -, -), the grid's entries (shape per entry) and the shape boxes
-	const float *bodyOut; uint32_t nEntries; const uint32_t *eshape; const float *sbb;
+	// phase 2 results: bodies (8 floats each: p, v, a, w, -, -), contacts of the Jacobi pass (uncoloured and small colours)
+	const float *bodyOut; uint32_t nJacobi;
 	// timing of the last phases (µs): CPU recording + submit, wait, and GPU time when timestamps are available
 	double usRecord1, usWait1, usRecord2, usWait2, usGpu1, usGpu2;
 } CvkFrame;

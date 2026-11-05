@@ -228,6 +228,60 @@ static int compare(const char *label, Trace *a, Trace *b)
 	return 0;
 }
 
+/* Overlap of the zombies (circles): every pair closer than the sum of the radii, found with a 1-unit grid (the largest
+   radius is 0.35). Adds to the running sums: bodies, touching pairs, depth sum, depths (for percentiles). */
+typedef struct { double bodies, pairs, depth; float *d; size_t nd, capd; int snaps; } Overlap;
+static int cmp_float(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return x < y ? -1 : x > y; }
+static void overlap_add(Overlap *o, const PF *p, const float *r, int n)
+{
+	if (n <= 0) return;
+	float x0 = p[0].x, y0 = p[0].y, x1 = x0, y1 = y0;
+	for (int i = 1; i < n; i++) { x0 = fminf(x0, p[i].x); x1 = fmaxf(x1, p[i].x); y0 = fminf(y0, p[i].y); y1 = fmaxf(y1, p[i].y); }
+	int gw = (int)(x1 - x0) + 2, gh = (int)(y1 - y0) + 2;
+	if ((double)gw * gh > 64e6) return;
+	int *start = calloc((size_t)gw * gh + 1, sizeof(int)), *item = malloc((size_t)n * sizeof(int)), *cell = malloc((size_t)n * sizeof(int));
+	if (!start || !item || !cell) { free(start); free(item); free(cell); return; }
+	for (int i = 0; i < n; i++) { cell[i] = (int)(p[i].y - y0) * gw + (int)(p[i].x - x0); start[cell[i] + 1]++; }
+	for (int c = 0; c < gw * gh; c++) start[c + 1] += start[c];
+	int *fill = malloc((size_t)gw * gh * sizeof(int));
+	if (!fill) { free(start); free(item); free(cell); return; }
+	memcpy(fill, start, (size_t)gw * gh * sizeof(int));
+	for (int i = 0; i < n; i++) item[fill[cell[i]]++] = i;
+	free(fill);
+	for (int i = 0; i < n; i++)
+	{
+		int cx = cell[i] % gw, cy = cell[i] / gw;
+		for (int dy = -1; dy <= 1; dy++)
+			for (int dx = -1; dx <= 1; dx++)
+			{
+				int x = cx + dx, y = cy + dy;
+				if (x < 0 || y < 0 || x >= gw || y >= gh) continue;
+				for (int k = start[y * gw + x]; k < start[y * gw + x + 1]; k++)
+				{
+					int j = item[k];
+					if (j <= i) continue;
+					float ex = p[j].x - p[i].x, ey = p[j].y - p[i].y, rr = r[i] + r[j], d2 = ex * ex + ey * ey;
+					if (d2 >= rr * rr) continue;
+					float depth = rr - sqrtf(d2);
+					o->pairs += 1; o->depth += depth;
+					if (o->nd == o->capd) { size_t c = o->capd ? o->capd * 2 : 65536; float *g = realloc(o->d, c * sizeof(float)); if (!g) continue; o->d = g; o->capd = c; }
+					o->d[o->nd++] = depth;
+				}
+			}
+	}
+	o->bodies += n; o->snaps++;
+	free(start); free(item); free(cell);
+}
+static void overlap_print(Overlap *o)
+{
+	if (!o->snaps || !o->nd) { printf("  겹침: 맞닿은 쌍 없음\n"); return; }
+	qsort(o->d, o->nd, sizeof(float), cmp_float);
+	printf("  겹침(마지막 %d단계): 맞닿은 쌍 %.2f/몸체 · 깊이 평균 %.4f · 중앙 %.4f · 95%% %.4f · 99%% %.4f · 최대 %.4f\n", o->snaps,
+		o->pairs / o->bodies, o->depth / o->pairs, o->d[o->nd / 2], o->d[(size_t)(o->nd * 0.95)], o->d[(size_t)(o->nd * 0.99)], o->d[o->nd - 1]);
+	free(o->d); memset(o, 0, sizeof *o);
+}
+
+static int g_ovSteps = 5;   /* COMPARE_OVERLAP_STEPS: the last steps whose overlap is measured */
 static int prof_main(const char *dllPath, int n, int steps, int kills)
 {
 	Api A; if (!load(&A, dllPath, "계측")) return 2;
@@ -252,11 +306,15 @@ static int prof_main(const char *dllPath, int n, int steps, int kills)
 			A.Body_SetCategoryMask(b, CAT_WALL); A.Body_SetCollisionMask(b, MASK_WALL); A.Body_SetUserData(b, (void *)(intptr_t)(100000 + nw++));
 		}
 	Ent *e = calloc(n, sizeof(Ent));
+	float *rad = malloc((size_t)n * sizeof(float)); PF *pos = malloc((size_t)n * sizeof(PF));
+	Overlap ov = {0};
+	if (getenv("COMPARE_OVERLAP_STEPS")) g_ovSteps = atoi(getenv("COMPARE_OVERLAP_STEPS"));
 	for (int i = 0; i < n; i++)
 	{
 		float a = rndf(0, 6.2831853f), d = rndf(45, 90);
 		e[i].m = 1.0f; e[i].speed = rndf(0.8f, 1.6f); e[i].alive = 1;
-		e[i].b = A.Body_CreateCircle(space, 1.0f, C + cosf(a) * d, C + sinf(a) * d, rnd() % 2 ? 0.25f : 0.35f); A.Body_SetType(e[i].b, 2);
+		rad[i] = rnd() % 2 ? 0.25f : 0.35f;
+		e[i].b = A.Body_CreateCircle(space, 1.0f, C + cosf(a) * d, C + sinf(a) * d, rad[i]); A.Body_SetType(e[i].b, 2);
 		A.Body_SetCategoryMask(e[i].b, CAT_ZOMBIE); A.Body_SetCollisionMask(e[i].b, MASK_UNIT); A.Body_SetUserData(e[i].b, (void *)(intptr_t)(i + 1));
 	}
 	LARGE_INTEGER f, t0, t1; QueryPerformanceFrequency(&f); double wall = 0; int measured = 0;
@@ -277,13 +335,15 @@ static int prof_main(const char *dllPath, int n, int steps, int kills)
 			if (fabsf(p.x - C) > H + 3 || fabsf(p.y - C) > H + 3) continue;
 			A.Body_Dispose(e[i].b); k++;
 			float a = rndf(0, 6.2831853f), d = rndf(70, 90);
-			e[i].b = A.Body_CreateCircle(space, 1.0f, C + cosf(a) * d, C + sinf(a) * d, 0.3f); A.Body_SetType(e[i].b, 2);
+			e[i].b = A.Body_CreateCircle(space, 1.0f, C + cosf(a) * d, C + sinf(a) * d, 0.3f); A.Body_SetType(e[i].b, 2); rad[i] = 0.3f;
 			A.Body_SetCategoryMask(e[i].b, CAT_ZOMBIE); A.Body_SetCollisionMask(e[i].b, MASK_UNIT); A.Body_SetUserData(e[i].b, (void *)(intptr_t)(i + 1));
 		}
 		A.Space_Step(space, dt);
 		QueryPerformanceCounter(&t1); wall += (double)(t1.QuadPart - t0.QuadPart) / f.QuadPart; measured++;
 		if (t.n > (1u << 20)) t.n = 0;
+		if (s >= steps - g_ovSteps) { for (int i = 0; i < n; i++) pos[i] = A.Body_GetPosition(e[i].b); overlap_add(&ov, pos, rad, n); }   /* not timed */
 	}
+	overlap_print(&ov); free(rad); free(pos);
 	if (vulkan)
 	{
 		int k = opt(309, 0); double d = k > 0 ? k : 1;

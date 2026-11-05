@@ -60,6 +60,7 @@ typedef struct VBody {
 	int slot, alive, fresh;
 	float mass, moment;         // dynamic mass properties, kept across type changes
 	int uploadStamp, patchStamp, posStamp;
+	int grp, gslot;             // body group (DX_GroupNew slot + 1, 0 none) and index in it; under g_grplk
 } VBody;
 
 typedef struct VShape {
@@ -128,6 +129,20 @@ struct World {
 };
 
 static World *g_world;
+// Body groups (TABPerf: the swarm minimap indicator, as in the Rapier wrapper): ids are slot | generation << 12.
+typedef struct { VBody **b; int n, cap; int gen; int used; } BodyGroup;
+#define GRP_SLOTS 4096
+static BodyGroup *g_grps; static int g_ngrps;
+static SRWLOCK g_grplk = SRWLOCK_INIT;   // taken after W->cs, never before it
+static void group_release(BodyGroup *g) { for (int i = 0; i < g->n; i++) g->b[i]->grp = 0; g->n = 0; g->used = 0; }
+static void group_remove(VBody *b)   // caller holds g_grplk exclusively
+{
+	if (!b->grp) return;
+	BodyGroup *g = &g_grps[b->grp - 1];
+	int i = b->gslot; VBody *last = g->b[--g->n];
+	g->b[i] = last; last->gslot = i;
+	b->grp = 0;
+}
 static DXCollisionCallback g_collision;
 static DXSeparationCallback g_separation;
 static volatile LONG g_cbwindow;    // the step is inside the game's callbacks: body changes are sent to the second half
@@ -135,6 +150,7 @@ static int g_threads_explicit;
 static char g_status[512] = "not started";
 static int g_gpuWanted = -1;        // -1 unknown, 0 = CPU mode asked (DX_VK_GPU=0), 1 = GPU
 static int g_iterOverride;           // DX_VK_ITERATIONS / DX_SetOption(210): solver passes (0 = the game's value)
+static int g_jacobiMax = -1;         // DX_VK_JACOBI_MAX / DX_SetOption(211): colours of at most this many contacts go to the Jacobi pass
 static int g_steps_seen;
 
 // step section times (µs) and counts since the last reset (DX_SetOption 300-309, 399)
@@ -294,7 +310,7 @@ static void free_body_now(World *W, VBody *b)
 		while ((s = c->shapeList) != NULL) { cpSpaceRemoveShape(W->cpu, s); vshape(s)->alive = 0; EnterCriticalSection(&W->cs); iv_push(&W->shapes.freeList, vshape(s)->slot); LeaveCriticalSection(&W->cs); }
 		cpSpaceRemoveBody(W->cpu, c);
 		EnterCriticalSection(&W->cs);
-		b->alive = 0;
+		AcquireSRWLockExclusive(&g_grplk); group_remove(b); b->alive = 0; ReleaseSRWLockExclusive(&g_grplk);
 		iv_push(&W->bodies.freeList, b->slot);
 		LeaveCriticalSection(&W->cs);
 		return;
@@ -314,7 +330,8 @@ static void free_body_now(World *W, VBody *b)
 		LeaveCriticalSection(&W->cs);
 	}
 	EnterCriticalSection(&W->cs);
-	b->alive = 0;
+	// with alive = 0 under the group lock: DX_GroupAdd either sees it dead or is undone here
+	AcquireSRWLockExclusive(&g_grplk); group_remove(b); b->alive = 0; ReleaseSRWLockExclusive(&g_grplk);
 	iv_push(&W->bodies.limbo, b->slot);
 	LeaveCriticalSection(&W->cs);
 }
@@ -478,6 +495,37 @@ static int dg_build(World *W, SGrid *g, const CvkFrame *F)
 	return grid_fill(g, 2.0f, DYN_SALT);
 }
 
+// The dynamic grid is built on its own thread while the GPU runs the second half of the step (its inputs come back
+// with the first half). One job at a time: dg_start, then dg_join before the step ends.
+static struct { HANDLE thread, go, done; World *W; SGrid *g; const CvkFrame *F; int ok, running; } g_dg;
+static DWORD WINAPI dg_thread(void *p)
+{
+	(void)p;
+	dx_diag_thread();
+	for (;;)
+	{
+		WaitForSingleObject(g_dg.go, INFINITE);
+		g_dg.ok = dg_build(g_dg.W, g_dg.g, g_dg.F);
+		SetEvent(g_dg.done);
+	}
+}
+static void dg_start(World *W, SGrid *g, const CvkFrame *F)
+{
+	g_dg.W = W; g_dg.g = g; g_dg.F = F;
+	if (!g_dg.thread)
+	{
+		g_dg.go = CreateEventA(NULL, FALSE, FALSE, NULL); g_dg.done = CreateEventA(NULL, FALSE, FALSE, NULL);
+		if (g_dg.go && g_dg.done) g_dg.thread = CreateThread(NULL, 0, dg_thread, NULL, 0, NULL);
+	}
+	if (g_dg.thread) { g_dg.running = 1; SetEvent(g_dg.go); }
+	else g_dg.ok = dg_build(W, g, F);   // no thread: here
+}
+static int dg_join(void)
+{
+	if (g_dg.running) { WaitForSingleObject(g_dg.done, INFINITE); g_dg.running = 0; }
+	return g_dg.ok;
+}
+
 // ---------- queries (GPU mode) ----------
 typedef void (*CandFn)(VShape *s, const float *bb, void *ctx);
 
@@ -635,6 +683,7 @@ DX_EXPORT cpSpace *Space_Create(float gravityX, float gravityY, int iterations)
 	W->damping = 0.001f; W->slop = 0.1f; W->collisionBias = cpfpow(1.0f - 0.1f, 60.0f);
 	W->cell0 = 0.5f;
 	if (g_iterOverride == 0) g_iterOverride = env_int("DX_VK_ITERATIONS", 0);
+	if (g_jacobiMax < 0) { int v = env_int("DX_VK_JACOBI_MAX", 256); g_jacobiMax = v < 0 ? 0 : v; }
 	char err[256] = "";
 	if (gpu_wanted() && cvk_init(err, sizeof err))
 	{
@@ -649,7 +698,8 @@ DX_EXPORT cpSpace *Space_Create(float gravityX, float gravityY, int iterations)
 		else _snprintf(g_status, sizeof g_status, "CPU (upstream cpSpaceStep): %s", err);
 		g_status[sizeof g_status - 1] = 0;
 	}
-	// The previous world is never stepped again; its records stay (the game may still dispose its bodies).
+	// The previous world is never stepped again; its records stay (the game may still dispose its bodies). Groups empty.
+	AcquireSRWLockExclusive(&g_grplk); for (int k = 0; k < g_ngrps; k++) group_release(&g_grps[k]); ReleaseSRWLockExclusive(&g_grplk);
 	g_world = W;
 	if (!g_threads_explicit)
 	{
@@ -828,9 +878,14 @@ static int gpu_step(World *W, float dt)
 	float prev = W->currDt; W->currDt = dt;
 	F.nBodies = nb; F.nShapes = ns; F.nShapePatches = (uint32_t)patchSlots.n;
 	F.hs = sg->hs; F.nStaticItems = sg->nItems; F.nStaticRecs = sg->nRecs; F.scell = sg->cell;
-	// The coloured passes are Gauss-Seidel like Chipmunk's, so the game's iteration count is used as is;
-	// DX_VK_ITERATIONS / DX_SetOption(210) set the count directly.
-	F.iterations = (uint32_t)(g_iterOverride > 0 ? g_iterOverride : W->iterations);
+	// The coloured passes are Gauss-Seidel, but a push travels only a few contacts per pass in colour order (Chipmunk's
+	// sequential order carries it further): 2.5 passes per game iteration (10 -> 25) gave the harness crowd of 60,000 at
+	// most the overlap of upstream Chipmunk with 10 (touching pairs per body 3.00 against 3.30, depth 95th percentile 0.29
+	// against 0.32, 99th 0.41 against 0.43; 20 passes left the 99th at 0.47; the same with DX_VK_JACOBI_MAX 256, which
+	// moves only that scene's few small colours). DX_VK_ITERATIONS / DX_SetOption(210)
+	// set the count directly.
+	F.iterations = (uint32_t)(g_iterOverride > 0 ? g_iterOverride : (W->iterations * 5 + 1) / 2);
+	F.jacobiMax = (uint32_t)g_jacobiMax;
 	F.dt = dt; F.damping = cpfpow(W->damping, dt); F.biasCoef = 1.0f - cpfpow(W->collisionBias, dt); F.slop = W->slop;
 	F.dtCoef = prev == 0.0f ? 0.0f : dt / prev; F.gx = W->gx; F.gy = W->gy; F.cell0 = W->cell0;
 	int ok = cvk_reserve1(&F);
@@ -854,6 +909,8 @@ static int gpu_step(World *W, float dt)
 	double t1 = now_us();
 	if (!ok || !cvk_phase1(&F)) return 0;
 	double t2 = now_us();
+	// the query grid of this step from the boxes phase 1 computed, while the callbacks and phase 2 run
+	dg_start(W, &W->dg[W->dgCur ^ 1], &F);
 
 	W->patches.n = 0;
 	run_callbacks(W, &F);
@@ -876,12 +933,12 @@ static int gpu_step(World *W, float dt)
 		}
 	}
 	LeaveCriticalSection(&W->cs);
-	if (!ok || !cvk_phase2(&F)) return 0;
+	if (!ok || !cvk_phase2(&F)) { dg_join(); return 0; }
 	double t4 = now_us();
 
-	int dgOk = dg_build(W, &W->dg[W->dgCur ^ 1], &F);
 	struct PackCtx wc = { W, &F, stamp };
 	dx_parallel_for((int)nb, 4096, 16384, writeback_range, &wc);
+	int dgOk = dg_join();
 
 	// the new grid for queries; slots freed before this step's upload are free now
 	AcquireSRWLockExclusive(&W->idx);
@@ -911,13 +968,13 @@ static int gpu_step(World *W, float dt)
 		statsTried = 1;
 		char path[MAX_PATH]; DWORD n = GetEnvironmentVariableA("DX_VK_STATS", path, sizeof path);
 		if (n > 0 && n < sizeof path && (statsFile = fopen(path, "w")) != NULL)
-			fprintf(statsFile, "step,t_s,bodies,shapes,shape_patches,static_rebuilt,contacts,colors,uncolored,cb_pairs,body_patches,prep_ms,p1_rec_ms,p1_wait_ms,p1_gpu_ms,callbacks_ms,p2_rec_ms,p2_wait_ms,p2_gpu_ms,writeback_ms,total_ms\n");
+			fprintf(statsFile, "step,t_s,bodies,shapes,shape_patches,static_rebuilt,contacts,colors,uncolored,max_degree,jacobi,cb_pairs,body_patches,prep_ms,p1_rec_ms,p1_wait_ms,p1_gpu_ms,callbacks_ms,p2_rec_ms,p2_wait_ms,p2_gpu_ms,writeback_ms,total_ms\n");
 	}
 	if (statsFile)
 	{
 		static double tStart; if (tStart == 0) tStart = t0;
-		fprintf(statsFile, "%d,%.3f,%u,%u,%u,%d,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", stamp, (t0 - tStart) / 1e6, nb, ns, F.nShapePatches, rebuilt,
-			F.nContacts, F.nColors, F.nUncolored, F.nCb, F.nBodyPatches, (t1 - t0) / 1e3, F.usRecord1 / 1e3, F.usWait1 / 1e3, F.usGpu1 / 1e3, (t3 - t2) / 1e3, F.usRecord2 / 1e3, F.usWait2 / 1e3, F.usGpu2 / 1e3, (t5 - t4) / 1e3, (t5 - t0) / 1e3);
+		fprintf(statsFile, "%d,%.3f,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", stamp, (t0 - tStart) / 1e6, nb, ns, F.nShapePatches, rebuilt,
+			F.nContacts, F.nColors, F.nUncolored, F.maxDegree, F.nJacobi, F.nCb, F.nBodyPatches, (t1 - t0) / 1e3, F.usRecord1 / 1e3, F.usWait1 / 1e3, F.usGpu1 / 1e3, (t3 - t2) / 1e3, F.usRecord2 / 1e3, F.usWait2 / 1e3, F.usGpu2 / 1e3, (t5 - t4) / 1e3, (t5 - t0) / 1e3);
 		if ((stamp & 15) == 0) fflush(statsFile);
 	}
 	return 1;
@@ -1345,12 +1402,99 @@ DX_EXPORT int DX_VulkanProbe(char *msg, int cap)
 }
 DX_EXPORT int DX_VulkanStatus(char *msg, int cap) { if (msg && cap > 0) { _snprintf(msg, (size_t)cap, "%s", g_status); msg[cap - 1] = 0; } return g_world && g_world->gpu ? 1 : 0; }
 
+// ---------- body groups (TABPerf: the swarm minimap indicator; the same calls as the Rapier wrapper's) ----------
+static BodyGroup *group_of(int id)   // caller holds g_grplk
+{
+	if (id < 0) return NULL;
+	int slot = id & (GRP_SLOTS - 1), gen = id >> 12;
+	if (slot >= g_ngrps || !g_grps[slot].used || g_grps[slot].gen != gen) return NULL;
+	return &g_grps[slot];
+}
+
+// New empty group: its id (>= 0), or -1 when all GRP_SLOTS are in use.
+DX_EXPORT int DX_GroupNew(void)
+{
+	AcquireSRWLockExclusive(&g_grplk);
+	int slot = 0;
+	while (slot < g_ngrps && g_grps[slot].used) slot++;
+	if (slot == g_ngrps)
+	{
+		BodyGroup *g = g_ngrps < GRP_SLOTS ? (BodyGroup *)realloc(g_grps, (size_t)(g_ngrps + 1) * sizeof *g_grps) : NULL;
+		if (!g) { ReleaseSRWLockExclusive(&g_grplk); return -1; }
+		g_grps = g; memset(&g_grps[g_ngrps++], 0, sizeof *g_grps);
+	}
+	BodyGroup *g = &g_grps[slot];
+	g->used = 1; g->n = 0; g->gen = (g->gen + 1) & 0x7FFFF;
+	int id = slot | (g->gen << 12);
+	ReleaseSRWLockExclusive(&g_grplk);
+	return id;
+}
+
+DX_EXPORT void DX_GroupFree(int id)
+{
+	AcquireSRWLockExclusive(&g_grplk);
+	BodyGroup *g = group_of(id);
+	if (g) group_release(g);
+	ReleaseSRWLockExclusive(&g_grplk);
+}
+
+// Adds bodies (a body in another group moves; null, disposed and member ones are skipped): the number added, -1 stale id.
+DX_EXPORT int DX_GroupAdd(int id, cpBody **bodies, int n)
+{
+	int added = 0;
+	AcquireSRWLockExclusive(&g_grplk);
+	BodyGroup *g = group_of(id);
+	if (!g) { ReleaseSRWLockExclusive(&g_grplk); return -1; }
+	int gi = (int)(g - g_grps) + 1;
+	for (int k = 0; k < n; k++)
+	{
+		VBody *b = bodies[k] ? vbody(bodies[k]) : NULL;
+		if (!b || !b->alive || b->grp == gi) continue;
+		if (g->n == g->cap)
+		{
+			int c = g->cap ? g->cap * 2 : 1024;
+			VBody **m = (VBody **)realloc(g->b, (size_t)c * sizeof *m);
+			if (!m) break;
+			g->b = m; g->cap = c;
+		}
+		group_remove(b);
+		b->grp = gi; b->gslot = g->n; g->b[g->n++] = b;
+		added++;
+	}
+	ReleaseSRWLockExclusive(&g_grplk);
+	return added;
+}
+
+// The members still alive - head shape category not 0 (the game clears it when a unit dies and keeps the body for the
+// death animation) - and the sums of their cells (each position coordinate truncated to int, int sums wrapping like the
+// game's Point.Add): out[0] alive, out[1] sum x, out[2] sum y. Returns the number of members, -1 for a stale id.
+DX_EXPORT int DX_GroupCells(int id, int *out)
+{
+	AcquireSRWLockShared(&g_grplk);
+	BodyGroup *g = group_of(id);
+	if (!g) { ReleaseSRWLockShared(&g_grplk); out[0] = out[1] = out[2] = 0; return -1; }
+	unsigned alive = 0, sx = 0, sy = 0;
+	VBody **b = g->b; int n = g->n;
+	for (int i = 0; i < n; i++)
+	{
+		if (i + 8 < n) _mm_prefetch((const char *)b[i + 8], _MM_HINT_T0);
+		const VBody *r = b[i];
+		const cpShape *s = r->cp.shapeList;
+		if (!r->alive || (s && s->filter.categories == 0)) continue;
+		alive++; sx += (unsigned)(int)r->cp.p.x; sy += (unsigned)(int)r->cp.p.y;
+	}
+	ReleaseSRWLockShared(&g_grplk);
+	out[0] = (int)alive; out[1] = (int)sx; out[2] = (int)sy;
+	return n;
+}
+
 DX_EXPORT int DX_SetOption(int name, int value)
 {
 	if (name == 0) { g_threads_explicit = 1; dx_pool_set_threads(value); return dx_pool_threads(); }
 	if (name == 200) return 3;                                   // backend: Chipmunk2DVulkan
 	if (name == 201) return g_world && g_world->gpu ? 1 : 0;      // 1 = steps on the GPU, 0 = CPU mode
 	if (name == 210) { int o = g_iterOverride; g_iterOverride = value; return o; }
+	if (name == 211) { int o = g_jacobiMax; g_jacobiMax = value < 0 ? 0 : value; return o; }
 	if (name >= 300 && name <= 309)
 	{
 		LONG n = g_stSteps;

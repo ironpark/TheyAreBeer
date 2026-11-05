@@ -34,13 +34,14 @@ static const struct { const uint32_t *code; size_t size; } g_spv[K_N] = { CVK_KE
 
 // ---------- bindings (cpvk.comp) and physical buffers ----------
 enum {
-	B_BODIES, B_BIAS, B_ACC, B_SHAPES, B_SPATCH, B_SBB, B_SCELL, B_GSTART, B_GCURSOR, B_ESHAPE, B_EKEY, B_SSTART, B_SITEMS, B_SRECS,
-	B_OSTART, B_CON, B_CB, B_GLOB, B_WPREV, B_WCUR, B_OPREV, B_OGEN, B_OGENPREV, B_DLIST, B_BPATCH, B_BOUT, B_SBLOCKS, B_CMASK, B_CLIST, B_N
+	B_BODIES, B_SB, B_ACC, B_SHAPES, B_SPATCH, B_SBB, B_SCELL, B_GSTART, B_GCURSOR, B_ESHAPE, B_EKEY, B_SSTART, B_SITEMS, B_SRECS,
+	B_OSTART, B_CON, B_CB, B_GLOB, B_WPREV, B_WCUR, B_OPREV, B_OGEN, B_OGENPREV, B_DLIST, B_BPATCH, B_BOUT, B_SBLOCKS, B_CMASK, B_CLIST, B_SC, B_N
 };
 // physical: the single bindings keep their number; the ping-pong ones have two buffers each
 enum { P_OSTART0 = B_N, P_OSTART1, P_WARM0, P_WARM1, P_OGEN0, P_OGEN1, P_UP, P_RB1, P_RB2A, P_RB2B, P_N };
 
-#define GLOB_BYTES 1024   // cpvk.comp glob[]: 0..2 counters, G_CCOUNT and G_CCURSOR
+#define GLOB_BYTES 1024   // cpvk.comp glob[]: 0..3 counters, G_CCOUNT and G_CCURSOR
+#define G_MAXDEG 3
 #define G_CCOUNT 64
 
 typedef struct { VkBuffer buf; VkDeviceMemory mem; VkDeviceSize size; void *map; int host; } GBuf;
@@ -321,6 +322,14 @@ static void barrier(void)
 	mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
 	vkCmdPipelineBarrier(G.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
 }
+// between compute dispatches only (the solver passes)
+static void compute_barrier(void)
+{
+	VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+	mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+	mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+	vkCmdPipelineBarrier(G.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+}
 static void host_barrier(void)
 {
 	VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
@@ -386,9 +395,18 @@ static int submit_wait(double *gpuUs, double *waitUs)
 
 static uint32_t pow2_at_least(uint32_t n) { uint32_t p = 1; while (p < n && p < (1u << 31)) p <<= 1; return p; }
 #define ALIGN256(x) (((x) + 255u) & ~255u)
-// phase 1 readback: the globals (level occupancy, callback counts, contacts per colour), the contact total, the callback pairs
-#define RB1_TOTAL GLOB_BYTES
-#define RB1_CB (GLOB_BYTES + 256)
+// phase 1 readback: the globals (level occupancy, callback counts, contacts per colour), the contact total and the
+// grid's entry count, the callback pairs, and for the query grid the entries (shape per entry) and the shape boxes
+typedef struct { VkDeviceSize glob, total, entries, cb, shape, bb, size; } Rb1Layout;
+static void rb1_layout(Rb1Layout *L, uint32_t ns, uint32_t cbCap)
+{
+	VkDeviceSize o = 0;
+#define RB_AT(field, bytes) L->field = o; o += ((VkDeviceSize)(bytes) + 255) & ~(VkDeviceSize)255
+	RB_AT(glob, GLOB_BYTES); RB_AT(total, 4); RB_AT(entries, 4);
+	RB_AT(cb, (VkDeviceSize)cbCap * sizeof(CvkCbPair)); RB_AT(shape, (VkDeviceSize)ns * 4); RB_AT(bb, (VkDeviceSize)ns * 16);
+#undef RB_AT
+	L->size = o;
+}
 
 // ---------- phase 1 ----------
 int cvk_reserve1(CvkFrame *f)
@@ -403,7 +421,7 @@ int cvk_reserve1(CvkFrame *f)
 	int r;
 #define ENS(p, bytes, host) do { r = ensure((p), (VkDeviceSize)(bytes), (host)); if (!r) return 0; } while (0)
 	ENS(B_BODIES, (VkDeviceSize)nb * sizeof(CvkBody), 0);
-	ENS(B_BIAS, (VkDeviceSize)nb * 16, 0); if (r == 2) G.bodiesFresh = 1;
+	ENS(B_SB, (VkDeviceSize)nb * 32, 0); if (r == 2) G.bodiesFresh = 1;   // the bias velocities between steps are in it
 	ENS(B_ACC, (VkDeviceSize)nb * 32, 0);
 	ENS(B_BOUT, (VkDeviceSize)nb * 32, 0);
 	ENS(B_SPATCH, (VkDeviceSize)(f->nShapePatches ? f->nShapePatches : 1) * sizeof(CvkShapePatch), 0);
@@ -418,8 +436,9 @@ int cvk_reserve1(CvkFrame *f)
 	ENS(B_SRECS, (VkDeviceSize)(f->nStaticRecs ? f->nStaticRecs : 1) * sizeof(CvkStaticRec), 0);
 	ENS(B_CON, (VkDeviceSize)G.conCap * CVK_CONTACT_BYTES, 0);
 	ENS(B_CB, (VkDeviceSize)G.cbCap * sizeof(CvkCbPair), 0);
-	ENS(B_CMASK, (VkDeviceSize)nb * 4, 0);
+	ENS(B_CMASK, (VkDeviceSize)nb * 8, 0);
 	ENS(B_CLIST, (VkDeviceSize)G.conCap * 4, 0);
+	ENS(B_SC, (VkDeviceSize)G.conCap * CVK_SCONTACT_BYTES, 0);
 	int cur = G.parity;
 	ENS(cur ? P_OSTART1 : P_OSTART0, (VkDeviceSize)(ns + 1) * 4, 0);
 	ENS(cur ? P_OGEN1 : P_OGEN0, (VkDeviceSize)ns * 4, 0);
@@ -434,7 +453,8 @@ int cvk_reserve1(CvkFrame *f)
 	G.upOff[4] = off; off = ALIGN256(off + f->nStaticRecs * (uint32_t)sizeof(CvkStaticRec));
 	G.upOff[5] = off;
 	ENS(P_UP, off, 1);
-	ENS(P_RB1, RB1_CB + (VkDeviceSize)G.cbCap * sizeof(CvkCbPair), 2);
+	Rb1Layout L1; rb1_layout(&L1, ns, G.cbCap);
+	ENS(P_RB1, L1.size, 2);
 	char *up = (char *)G.b[P_UP].map;
 	f->bodies = (CvkBody *)(up + G.upOff[0]);
 	f->shapePatches = (CvkShapePatch *)(up + G.upOff[1]);
@@ -477,9 +497,9 @@ int cvk_phase1(CvkFrame *f)
 			copy(P_UP, G.upOff[4], B_SRECS, 0, (VkDeviceSize)f->nStaticRecs * sizeof(CvkStaticRec));
 		}
 		vkCmdFillBuffer(G.cmd, G.b[B_GLOB].buf, 0, GLOB_BYTES, 0);
-		vkCmdFillBuffer(G.cmd, G.b[B_CMASK].buf, 0, (VkDeviceSize)(nb ? nb : 1) * 4, 0);
+		vkCmdFillBuffer(G.cmd, G.b[B_CMASK].buf, 0, (VkDeviceSize)(nb ? nb : 1) * 8, 0);
 		vkCmdFillBuffer(G.cmd, G.b[B_GSTART].buf, 0, (VkDeviceSize)(G.h + 1) * 4, 0);
-		if (G.bodiesFresh) vkCmdFillBuffer(G.cmd, G.b[B_BIAS].buf, 0, VK_WHOLE_SIZE, 0);
+		if (G.bodiesFresh) vkCmdFillBuffer(G.cmd, G.b[B_SB].buf, 0, VK_WHOLE_SIZE, 0);
 		barrier();
 		if (f->nShapePatches) run(K_SHAPE_SCATTER, f->nShapePatches);
 		run(K_INTEGRATE_POS, nb);
@@ -496,21 +516,30 @@ int cvk_phase1(CvkFrame *f)
 		// colours for the Gauss-Seidel passes and the contact list sorted by colour (skipped when the contacts overflowed)
 		dispatch(K_COLOR, G.conCap, G.conCap, 0, 0, groups(G.conCap, 256)); barrier();
 		dispatch(K_COLOR_SCATTER, G.conCap, G.conCap, 0, 0, groups(G.conCap, 256)); barrier();
-		copy(B_GLOB, 0, P_RB1, 0, GLOB_BYTES);
-		copy(phys_of(B_OSTART, G.parity), (VkDeviceSize)ns * 4, P_RB1, RB1_TOTAL, 4);
-		copy(B_CB, 0, P_RB1, RB1_CB, (VkDeviceSize)G.cbCap * sizeof(CvkCbPair));
+		Rb1Layout L; rb1_layout(&L, ns, G.cbCap);
+		copy(B_GLOB, 0, P_RB1, L.glob, GLOB_BYTES);
+		copy(phys_of(B_OSTART, G.parity), (VkDeviceSize)ns * 4, P_RB1, L.total, 4);
+		copy(B_GSTART, (VkDeviceSize)G.h * 4, P_RB1, L.entries, 4);   // gstart[h]: the total after the scan
+		copy(B_CB, 0, P_RB1, L.cb, (VkDeviceSize)G.cbCap * sizeof(CvkCbPair));
+		copy(B_ESHAPE, 0, P_RB1, L.shape, (VkDeviceSize)ns * 4);
+		copy(B_SBB, 0, P_RB1, L.bb, (VkDeviceSize)ns * 16);
 		host_barrier();
 		f->usRecord1 = now_us() - t0;
 		if (!submit_wait(&f->usGpu1, &f->usWait1)) return 0;
 		invalidate(&G.b[P_RB1]);
-		const uint32_t *rb = (const uint32_t *)G.b[P_RB1].map;
-		uint32_t total = rb[RB1_TOTAL / 4], ncb = rb[1];
+		const char *m1 = (const char *)G.b[P_RB1].map;
+		const uint32_t *rb = (const uint32_t *)(m1 + L.glob);
+		uint32_t total = *(const uint32_t *)(m1 + L.total), ncb = rb[1];
 		int again = 0;
-		if (total > G.conCap) { G.conCap = total + total / 4 + 1024; if (!ensure(B_CON, (VkDeviceSize)G.conCap * CVK_CONTACT_BYTES, 0) || !ensure(B_CLIST, (VkDeviceSize)G.conCap * 4, 0)) return 0; again = 1; }
-		if (ncb > G.cbCap) { G.cbCap = ncb + ncb / 2 + 1024; if (!ensure(B_CB, (VkDeviceSize)G.cbCap * sizeof(CvkCbPair), 0) || !ensure(P_RB1, RB1_CB + (VkDeviceSize)G.cbCap * sizeof(CvkCbPair), 2)) return 0; again = 1; }
+		if (total > G.conCap) { G.conCap = total + total / 4 + 1024; if (!ensure(B_CON, (VkDeviceSize)G.conCap * CVK_CONTACT_BYTES, 0) || !ensure(B_CLIST, (VkDeviceSize)G.conCap * 4, 0) || !ensure(B_SC, (VkDeviceSize)G.conCap * CVK_SCONTACT_BYTES, 0)) return 0; again = 1; }
+		if (ncb > G.cbCap) { G.cbCap = ncb + ncb / 2 + 1024; rb1_layout(&L, ns, G.cbCap); if (!ensure(B_CB, (VkDeviceSize)G.cbCap * sizeof(CvkCbPair), 0) || !ensure(P_RB1, L.size, 2)) return 0; again = 1; }
 		if (again) continue;
 		f->nContacts = total; f->nCb = ncb;
-		f->cb = (const CvkCbPair *)((const char *)G.b[P_RB1].map + RB1_CB);
+		f->cb = (const CvkCbPair *)(m1 + L.cb);
+		f->nEntries = *(const uint32_t *)(m1 + L.entries);
+		f->eshape = (const uint32_t *)(m1 + L.shape);
+		f->sbb = (const float *)(m1 + L.bb);
+		f->maxDegree = rb[G_MAXDEG];
 		uint32_t acc = 0; f->nColors = 0;
 		for (int k = 0; k <= CVK_NCOLORS; k++)
 		{
@@ -527,20 +556,11 @@ int cvk_phase1(CvkFrame *f)
 }
 
 // ---------- phase 2 ----------
-// phase 2 readback (per parity): bodies, the grid's entry count, entries (shape per entry), shape boxes
-typedef struct { VkDeviceSize bodies, count, shape, bb, size; } RbLayout;
-static void rb2_layout(RbLayout *L, uint32_t nb, uint32_t ns)
-{
-	VkDeviceSize o = 0;
-#define RB_AT(field, bytes) L->field = o; o += ((VkDeviceSize)(bytes) + 255) & ~(VkDeviceSize)255
-	RB_AT(bodies, (VkDeviceSize)nb * 32); RB_AT(count, 4); RB_AT(shape, (VkDeviceSize)ns * 4); RB_AT(bb, (VkDeviceSize)ns * 16);
-#undef RB_AT
-	L->size = o;
-}
+// phase 2 readback (per parity): the bodies, 32 bytes each
 int cvk_reserve2(CvkFrame *f)
 {
 	if (!G.ready) return 0;
-	uint32_t nb = f->nBodies ? f->nBodies : 1, ns = f->nShapes ? f->nShapes : 1;
+	uint32_t nb = f->nBodies ? f->nBodies : 1;
 	int r;
 	ENS(B_DLIST, (VkDeviceSize)(f->nDisable ? f->nDisable : 1) * 4, 0);
 	ENS(B_BPATCH, (VkDeviceSize)(f->nBodyPatches ? f->nBodyPatches : 1) * sizeof(CvkBodyPatch), 0);
@@ -550,8 +570,7 @@ int cvk_reserve2(CvkFrame *f)
 	G.up2Off[0] = off; off = ALIGN256(off + f->nDisable * 4);
 	G.up2Off[1] = off; off = ALIGN256(off + f->nBodyPatches * (uint32_t)sizeof(CvkBodyPatch));
 	ENS(P_UP, off, 1);
-	RbLayout L; rb2_layout(&L, nb, ns);
-	ENS(G.parity ? P_RB2B : P_RB2A, L.size, 2);
+	ENS(G.parity ? P_RB2B : P_RB2A, (VkDeviceSize)nb * 32, 2);
 	char *up = (char *)G.b[P_UP].map;
 	f->disable = (uint32_t *)(up + G.up2Off[0]);
 	f->bodyPatches = (CvkBodyPatch *)(up + G.up2Off[1]);
@@ -562,43 +581,41 @@ int cvk_phase2(CvkFrame *f)
 {
 	if (!G.ready) return 0;
 	double t0 = now_us();
-	uint32_t nb = f->nBodies, ns = f->nShapes, nc = f->nContacts;
+	uint32_t nb = f->nBodies, nc = f->nContacts;
 	if (!begin_cmd()) return 0;
 	copy(P_UP, G.up2Off[0], B_DLIST, 0, (VkDeviceSize)f->nDisable * 4);
 	copy(P_UP, G.up2Off[1], B_BPATCH, 0, (VkDeviceSize)f->nBodyPatches * sizeof(CvkBodyPatch));
-	vkCmdFillBuffer(G.cmd, G.b[B_BIAS].buf, 0, (VkDeviceSize)(nb ? nb : 1) * 16, 0);
 	barrier();
 	if (f->nBodyPatches) run(K_BODY_PATCH, f->nBodyPatches);
 	if (f->nDisable) run(K_DISABLE, f->nDisable);
 	barrier();
-	uint32_t nu = G.ccount[CVK_NCOLORS], us = G.cstart[CVK_NCOLORS];   // the uncoloured contacts (Jacobi)
-	if (nu) { dispatch(K_COUNT, nu, 0, 0, us, groups(nu, 256)); barrier(); }
-	run(K_PRESTEP, nc); run(K_INTEGRATE_VEL, nb); barrier();
+	// The Jacobi pass: the uncoloured contacts and the colours after the first CVK_GS_MIN that have at most jacobiMax
+	// contacts each (from the end: colours come out of the greedy colouring roughly largest first), so a body touching
+	// dozens of others does not cost a dispatch per colour and pass. Colour order puts them all at the end.
+	int k0 = CVK_NCOLORS;
+	while (k0 > CVK_GS_MIN && G.ccount[k0 - 1] <= f->jacobiMax) k0--;
+	uint32_t js = G.cstart[k0], nj = nc - js;   // the Jacobi pass: its start in colour order and its count
+	f->nJacobi = nj;
+	if (nj) { dispatch(K_COUNT, nj, 0, 0, js, groups(nj, 256)); barrier(); }
+	dispatch(K_PRESTEP, nc, 0, 0, js, groups(nc, 256)); run(K_INTEGRATE_VEL, nb); barrier();
 	if (f->dtCoef != 0.0f) { run(K_WARM, nc); barrier(); run(K_APPLY, nb); barrier(); }
 	// Gauss-Seidel by colour: each colour sees the velocities the colours before it left
 	for (uint32_t it = 0; it < f->iterations; it++)
 	{
-		for (int k = 0; k < CVK_NCOLORS; k++)
-			if (G.ccount[k]) { dispatch(K_CSOLVE, G.ccount[k], 0, 0, G.cstart[k], groups(G.ccount[k], 256)); barrier(); }
-		if (nu) { dispatch(K_SOLVE, nu, 0, 0, us, groups(nu, 256)); barrier(); run(K_APPLY, nb); barrier(); }
+		for (int k = 0; k < k0; k++)
+			if (G.ccount[k]) { dispatch(K_CSOLVE, G.ccount[k], 0, 0, G.cstart[k], groups(G.ccount[k], 256)); compute_barrier(); }
+		if (nj) { dispatch(K_SOLVE, nj, 0, 0, js, groups(nj, 256)); compute_barrier(); dispatch(K_APPLY, nj, 1, 0, js, groups(nj, 256)); compute_barrier(); }
 	}
 	run(K_OUTPUT, nb); run(K_WARM_SAVE, nc); barrier();
 	int rb = G.parity ? P_RB2B : P_RB2A;
-	RbLayout L; rb2_layout(&L, nb, ns);
-	copy(B_BOUT, 0, rb, L.bodies, (VkDeviceSize)nb * 32);
-	copy(B_GSTART, (VkDeviceSize)G.h * 4, rb, L.count, 4);   // gstart[h]: the total after the scan
-	copy(B_ESHAPE, 0, rb, L.shape, (VkDeviceSize)ns * 4);
-	copy(B_SBB, 0, rb, L.bb, (VkDeviceSize)ns * 16);
+	copy(B_BOUT, 0, rb, 0, (VkDeviceSize)nb * 32);
 	host_barrier();
 	f->usRecord2 = now_us() - t0;
 	if (!submit_wait(&f->usGpu2, &f->usWait2)) return 0;
 	GBuf *g = &G.b[rb]; invalidate(g);
 	const char *m = (const char *)g->map;
-	f->bodyOut = (const float *)(m + L.bodies);
-	f->nEntries = *(const uint32_t *)(m + L.count);
-	f->eshape = (const uint32_t *)(m + L.shape);
-	f->sbb = (const float *)(m + L.bb);
-	G.prevShapes = ns;
+	f->bodyOut = (const float *)m;
+	G.prevShapes = f->nShapes;
 	G.parity ^= 1;
 	return 1;
 }

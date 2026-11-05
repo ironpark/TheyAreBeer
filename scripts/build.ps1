@@ -127,6 +127,9 @@ function Build-Rapier {
     }
     Set-RapierPatches $srcDir $patches
     if (-not ((& rustup toolchain list) -match [regex]::Escape($rapierToolchain))) { & rustup toolchain install $rapierToolchain --profile minimal; Check "rustup install $rapierToolchain" }
+    # Cargo.lock is not in the Rapier repository (ignored), so a fresh checkout has none: resolve and download the crates
+    # once here, before the side-by-side builds would each write Cargo.lock into the shared source folder
+    Invoke-Cmd "set `"RUSTUP_TOOLCHAIN=$rapierToolchain`" && cargo fetch --manifest-path `"$srcDir\Cargo.toml`"" (Join-Path $out 'rapier-fetch.log') 'cargo fetch' -Tail
 
     # The variants build at the same time, one cmd.exe each (fat LTO with one codegen unit ends in a long single-threaded
     # link per variant; side by side these overlap). Each has its own build folder, log and RUSTFLAGS.
@@ -138,7 +141,8 @@ function Build-Rapier {
       $steps = "`"$vcvars`" >nul && cmake $cfg && cmake --build `"$($t.buildDir)`" --config Release --parallel && cmake --install `"$($t.buildDir)`" --config Release --prefix `"$($t.sdk)`""
       if ($test) { $steps += " && ctest --test-dir `"$($t.buildDir)`" -C Release --output-on-failure" }
       Remove-Item $t.stampFile -ErrorAction SilentlyContinue
-      $psi = New-Object Diagnostics.ProcessStartInfo 'cmd.exe', "/s /c `"$steps > `"$($t.log)`" 2>&1`""
+      # parentheses: the redirection covers the whole && chain, not only its last command
+      $psi = New-Object Diagnostics.ProcessStartInfo 'cmd.exe', "/s /c `"($steps) > `"$($t.log)`" 2>&1`""
       $psi.UseShellExecute = $false
       $psi.EnvironmentVariables['RUSTUP_TOOLCHAIN'] = $rapierToolchain
       # fat LTO across all crates, one codegen unit: Cargo's release profile through its environment variables
@@ -151,7 +155,7 @@ function Build-Rapier {
     $failed = @()
     foreach ($x in $procs) {
       $x.p.WaitForExit(); $t = $x.t
-      if ($x.p.ExitCode -ne 0) { Write-Host "---- Rapier$($t.name) ----"; Get-Content $t.log -Tail 30 | ForEach-Object { Write-Host $_ }; $failed += "Rapier CMake build$($t.name) or tests failed (see $($t.log))"; continue }
+      if ($x.p.ExitCode -ne 0) { Write-Host "---- Rapier$($t.name) (exit $($x.p.ExitCode)) ----"; if (Test-Path $t.log) { Get-Content $t.log -Tail 30 | ForEach-Object { Write-Host $_ } }; $failed += "Rapier CMake build$($t.name) or tests failed (see $($t.log))"; continue }
       $cache = Get-Content (Join-Path $t.buildDir 'CMakeCache.txt')
       foreach ($k in $rapierOptions.Keys) { if (-not ($cache -contains "$k=$($rapierOptions[$k])")) { throw "CMake cache$($t.name) lacks $k=$($rapierOptions[$k])" } }
       $t.tests = if ($t.test) { (Select-String -Path $t.log -Pattern 'tests passed' | Select-Object -Last 1).Line } else { 'tests skipped: this CPU lacks the instructions' }

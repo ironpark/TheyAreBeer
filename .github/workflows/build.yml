@@ -85,7 +85,7 @@ jobs:
       - name: Build logs
         if: failure()
         run: |
-          foreach ($f in Get-ChildItem native\out, mod\out, bench\out -Filter *.log -ErrorAction SilentlyContinue) {
+          foreach ($f in Get-ChildItem native\out, native\out\rapier, mod\out, bench\out -Filter *.log -ErrorAction SilentlyContinue) {
             $tail = (Get-Content $f.FullName -Tail 25 | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
             Write-Host "::error title=$($f.Name)::$tail"
           }

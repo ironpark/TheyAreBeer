@@ -1,4 +1,4 @@
-# Builds everything (Chipmunk and Rapier physics DLLs, the engine mod, the bench mod) on Windows and packages the mod
+# Builds everything (Chipmunk, Rapier and Chipmunk2DVulkan physics DLLs, the engine mod, the bench mod) on Windows and packages the mod
 # (scripts\package.ps1). A pushed tag v<version> sets that version (scripts\set-version.ps1) and publishes a GitHub
 # release with both packages; ModPackage.zip is the asset TABModLoader's auto-update installs.
 #
@@ -68,6 +68,13 @@ jobs:
           path: native\out\dxvk
           key: dxvk-${{ hashFiles('scripts/lib/dxvk.ps1') }}
 
+      # glslang (build-time shader compiler for Chipmunk2DVulkan)
+      - name: glslang cache
+        uses: actions/cache@v4
+        with:
+          path: native\out\glslang
+          key: glslang-${{ hashFiles('scripts/lib/glslang.ps1') }}
+
       - name: Build references (TABModLoader)
         run: .\scripts\setup.ps1 -NoPatch
 
@@ -78,14 +85,14 @@ jobs:
       # the three Rapier builds run side by side inside build.ps1
       - name: Build
         run: |
-          try { .\scripts\build.ps1 -Target chipmunk,harness,rapier,mod,bench }
+          try { .\scripts\build.ps1 -Target chipmunk,harness,rapier,chipmunk-vulkan,mod,bench }
           catch { Write-Host "::error title=build.ps1::$($_.Exception.Message) ($($_.InvocationInfo.PositionMessage -replace '\r?\n', '%0A'))"; throw }
 
       # on failure, the end of each build log as an annotation (shown on the run page)
       - name: Build logs
         if: failure()
         run: |
-          foreach ($f in Get-ChildItem native\out, native\out\rapier, mod\out, bench\out -Filter *.log -ErrorAction SilentlyContinue) {
+          foreach ($f in Get-ChildItem native\out, native\out\rapier, native\out\chipmunk-vulkan, mod\out, bench\out -Filter *.log -ErrorAction SilentlyContinue) {
             $tail = (Get-Content $f.FullName -Tail 25 | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
             Write-Host "::error title=$($f.Name)::$tail"
           }

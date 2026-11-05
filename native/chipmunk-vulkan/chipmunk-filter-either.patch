@@ -1,0 +1,20 @@
+diff --git a/include/chipmunk/chipmunk_private.h b/include/chipmunk/chipmunk_private.h
+index a4374f1..a242ff5 100644
+--- a/include/chipmunk/chipmunk_private.h
++++ b/include/chipmunk/chipmunk_private.h
+@@ -126,12 +126,10 @@ CircleSegmentQuery(cpShape *shape, cpVect center, cpFloat r1, cpVect a, cpVect b
+ static inline cpBool
+ cpShapeFilterReject(cpShapeFilter a, cpShapeFilter b)
+ {
+-	// Reject the collision if:
++	// They Are Billions: the game's DLL collides two shapes when either category/mask direction matches
++	// (and has no groups); TABPerf's Chipmunk2DVulkan CPU mode keeps that rule.
+ 	return (
+-		// They are in the same non-zero group.
+-		(a.group != 0 && a.group == b.group) ||
+-		// One of the category/mask combinations fails.
+-		(a.categories & b.mask) == 0 ||
++		(a.categories & b.mask) == 0 &&
+ 		(b.categories & a.mask) == 0
+ 	);
+ }

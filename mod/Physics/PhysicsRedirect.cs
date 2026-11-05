@@ -53,6 +53,33 @@ namespace Billions
         }
         const uint LOAD_WITH_ALTERED_SEARCH_PATH = 8;   // the DLL's own folder is searched for its dependencies (rapier2d_ffi.dll)
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int VulkanText(byte[] msg, int cap);
+        // Chipmunk2DVulkan (DX_VulkanProbe): 1 = a Vulkan device is ready, 2 = CPU mode asked (DX_VK_GPU=0), 0 = no
+        // usable device, -1 = not that DLL or not loadable. msg: the device name or why not.
+        public static int ProbeVulkan(string dll, out string msg)
+        {
+            msg = "";
+            IntPtr mod = LoadLibraryExW(dll, IntPtr.Zero, LOAD_WITH_ALTERED_SEARCH_PATH);
+            if (mod == IntPtr.Zero) { msg = "오류 " + Marshal.GetLastWin32Error(); return -1; }
+            IntPtr p = GetProcAddress(mod, "DX_VulkanProbe");
+            if (p == IntPtr.Zero) { msg = "DX_VulkanProbe 없음"; return -1; }
+            var f = (VulkanText)Marshal.GetDelegateForFunctionPointer(p, typeof(VulkanText));
+            var buf = new byte[512];
+            int r = f(buf, buf.Length);
+            msg = Text(buf);
+            return r;
+        }
+        // DX_VulkanStatus of the replacement in use: "GPU: <device>" or "CPU (...): <why>"; null when not Chipmunk2DVulkan
+        public static string VulkanStatus()
+        {
+            var f = Proc<VulkanText>("DX_VulkanStatus");
+            if (f == null) return null;
+            var buf = new byte[512];
+            f(buf, buf.Length);
+            return Text(buf);
+        }
+        static string Text(byte[] b) { int n = Array.IndexOf(b, (byte)0); return System.Text.Encoding.UTF8.GetString(b, 0, n < 0 ? b.Length : n); }
+
         public static bool Install(Harmony h, string dll)
         {
             var sw = Stopwatch.StartNew();

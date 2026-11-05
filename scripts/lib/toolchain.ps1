@@ -37,16 +37,19 @@ function Invoke-Cmd([string]$cmd, [string]$log, [string]$what, [switch]$Tail) {
   }
 }
 
-# TABModLoader overwrites 5 bytes at DLL base + 0x13B3; that range must lie inside dx_text_pad (8 KB of nops, dxdiag.c).
-# Checks the link map, deletes the DLL when the pad is misplaced, and returns the pad RVA.
-function Assert-TextPad([string]$dll, [string]$map) {
-  $base = $null; $pad = $null
+# A symbol of the link map (by name, $size bytes) must cover RVA [$lo, $hi): deletes the DLL and throws otherwise.
+# Returns the symbol's RVA.
+function Assert-MapCovers([string]$dll, [string]$map, [string]$symbol, [uint64]$size, [uint64]$lo, [uint64]$hi) {
+  $base = $null; $at = $null
   foreach ($line in Get-Content $map) {
     if ($line -match 'Preferred load address is ([0-9A-Fa-f]+)') { $base = [Convert]::ToUInt64($Matches[1], 16) }
-    elseif ($line -match '^\s*[0-9A-Fa-f]{4}:[0-9A-Fa-f]{8}\s+dx_text_pad\s+([0-9A-Fa-f]+)\s') { $pad = [Convert]::ToUInt64($Matches[1], 16) }
+    elseif ($line -match ('^\s*[0-9A-Fa-f]{4}:[0-9A-Fa-f]{8}\s+' + [regex]::Escape($symbol) + '\s+([0-9A-Fa-f]+)\s')) { $at = [Convert]::ToUInt64($Matches[1], 16) }
   }
-  if ($null -eq $base -or $null -eq $pad) { Remove-Item $dll; throw "dx_text_pad not found in $map" }
-  $padRva = $pad - $base
-  if ($padRva -gt 0x13B3 -or ($padRva + 8192) -lt 0x13B8) { Remove-Item $dll; throw ('dx_text_pad at RVA 0x{0:X} does not cover the loader patch at 0x13B3' -f $padRva) }
-  $padRva
+  if ($null -eq $base -or $null -eq $at) { Remove-Item $dll; throw "$symbol not found in $map" }
+  $rva = $at - $base
+  if ($rva -gt $lo -or ($rva + $size) -lt $hi) { Remove-Item $dll; throw ('{0} at RVA 0x{1:X} (size 0x{2:X}) does not cover 0x{3:X}-0x{4:X}' -f $symbol, $rva, $size, $lo, $hi) }
+  $rva
 }
+
+# TABModLoader overwrites 5 bytes at DLL base + 0x13B3; that range must lie inside dx_text_pad (8 KB of nops, dxdiag.c).
+function Assert-TextPad([string]$dll, [string]$map) { Assert-MapCovers $dll $map 'dx_text_pad' 8192 0x13B3 0x13B8 }

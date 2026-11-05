@@ -1,5 +1,5 @@
 # In-game benchmark: the same fixed scenario on the unmodded game, the first release of the mod and the current mod.
-#   powershell -ExecutionPolicy Bypass -File scripts\bench.ps1 [-Target original,first,chipmunk,rapier] [-Dxvk] [-Zombies 100000]
+#   powershell -ExecutionPolicy Bypass -File scripts\bench.ps1 [-Target original,first,chipmunk,rapier,chipmunk-vulkan] [-Dxvk] [-Zombies 100000]
 #     [-OriginalZombies 50000] [-Runs 1] [-Factor 4] [-Delay 5] [-Seed 20261104] [-Timeout 3600] [-Zoom max|off] [-Diag] [-Threads -1] [-Counters]
 #     [-OutDir <folder>] [-GameDir <folder>]
 #
@@ -10,6 +10,7 @@
 #             Built once from git into native\out\first-release.
 #   chipmunk  the current mod, Chipmunk multi-core engine (the installed Mods\TABPerf)
 #   rapier    the current mod, Rapier engine
+#   chipmunk-vulkan  the current mod, Chipmunk2DVulkan engine (step on the GPU)
 # -Dxvk runs chipmunk and rapier with DXVK (the original and the first release cannot load it); without it they use the
 # system Direct3D 9. -Renderer dxvk|d3d9 picks the current mod's renderer directly (-Renderer dxvk = -Dxvk).
 #
@@ -55,7 +56,8 @@ $FirstCommit = 'ef035e1'
 
 # -File passes "-Target a,b" as one string: split it here
 $Target = @($Target | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
-$known = 'original', 'first', 'chipmunk', 'rapier'
+$known = 'original', 'first', 'chipmunk', 'rapier', 'chipmunk-vulkan'
+$currentEngines = 'chipmunk', 'rapier', 'chipmunk-vulkan'   # targets that run the current mod with one of its engines
 foreach ($t in $Target) { if ($known -notcontains $t) { throw "Unknown -Target $t (use $($known -join ', '))" } }
 if ($Runs -lt 1) { throw '-Runs must be 1 or more' }
 
@@ -71,7 +73,7 @@ $benchOut = Join-Path $repo 'bench\out'
 foreach ($p in $saved, $gameDllSaved, $benchMod) { if (Test-Path $p) { throw "$p is left from an interrupted benchmark - put it back (or remove it) first" } }
 if (-not (Test-Path (Join-Path $benchOut 'TABBench.dll'))) { throw 'TABBench is not built - run scripts\build.ps1 -Target bench' }
 if (-not (Test-Path (Join-Path $mod 'TABPerf.dll'))) { throw "TABPerf is not installed in $mod - run scripts\install.ps1 first" }
-foreach ($e in 'chipmunk', 'rapier') {
+foreach ($e in $currentEngines) {
   if ($Target -contains $e -and -not (Test-Path (Join-Path $mod "$e\DXPhysicsNative.dll"))) { throw "Engine $e is not installed in $mod\$e - run scripts\build.ps1 -Target $e, then scripts\install.ps1" }
 }
 if (Get-Process ($TabExe -replace '\.exe$', '') -ErrorAction SilentlyContinue) { throw 'The game is already running - close it first.' }
@@ -79,7 +81,7 @@ if (-not (Get-Process steam -ErrorAction SilentlyContinue)) { Write-Warning 'Ste
 
 # DXVK for the current mod: the installed one, else the copy install.ps1 downloaded (put in for the runs only)
 $dxvkDir = Join-Path $mod 'dxvk'; $dxvkAdded = $false
-if (($Dxvk -or $Renderer -eq 'dxvk') -and ($Target -contains 'chipmunk' -or $Target -contains 'rapier') -and -not (Test-Path (Join-Path $dxvkDir 'd3d9.dll'))) {
+if (($Dxvk -or $Renderer -eq 'dxvk') -and @($Target | Where-Object { $currentEngines -contains $_ }).Count -and -not (Test-Path (Join-Path $dxvkDir 'd3d9.dll'))) {
   $d = Join-Path $repo 'native\out\dxvk\d3d9.dll'
   if (-not (Test-Path $d)) { throw 'DXVK is not available - run scripts\install.ps1 once (it downloads it), or leave -Dxvk out' }
 }
@@ -117,7 +119,7 @@ $vars = 'TABBENCH_CSV', 'TABBENCH_AUTO', 'TABBENCH_SEED', 'TABBENCH_DELAY', 'TAB
 
 # Game folder state for one target; Restore-Game puts everything back.
 function Set-Game($t) {
-  $wantCurrent = $t -eq 'chipmunk' -or $t -eq 'rapier'
+  $wantCurrent = $currentEngines -contains $t
   if ($wantCurrent) {
     if (Test-Path $saved) { if (Test-Path $mod) { Remove-Item -Recurse -Force $mod }; Move-Item $saved $mod }
   }
@@ -154,7 +156,7 @@ function Summarize($csv, $t, $run) {
   function Avg($set, $col) { $v = @($set | ForEach-Object { [double]::Parse($_.$col, $inv) }); if ($v.Count) { ($v | Measure-Object -Average).Average } else { 0 } }
   $heavy = @($live | Where-Object { [int]$_.zombies -ge 90000 })
   [pscustomobject][ordered]@{
-    target = $t; renderer = $(if ($t -eq 'chipmunk' -or $t -eq 'rapier') { $(if ($Renderer) { $Renderer } elseif ($Dxvk) { 'dxvk' } else { 'd3d9' }) } else { 'd3d9' }); run = $run
+    target = $t; renderer = $(if ($currentEngines -contains $t) { $(if ($Renderer) { $Renderer } elseif ($Dxvk) { 'dxvk' } else { 'd3d9' }) } else { 'd3d9' }); run = $run
     end = $last.note; zombies_max = ($rows | ForEach-Object { [int]$_.zombies } | Measure-Object -Maximum).Maximum
     real_s = [math]::Round([double]::Parse($last.t_s, $inv) - $t0, 0)      # from the swarm to the end of the run
     game_s = [math]::Round([double]::Parse($last.game_time_s, $inv) - $(if ($swarm.Count) { [double]::Parse($swarm[0].game_time_s, $inv) } else { 0 }), 0)
@@ -183,7 +185,7 @@ try {
       $env:TABBENCH_CSV = $csv
       $env:TABBENCH_ZOMBIES = $(if ($t -eq 'original') { "$OriginalZombies" } else { "$Zombies" })
       foreach ($v in 'TABPERF_ENGINE', 'TABPERF_RENDERER', 'TABPERF_BENCH', 'TABPERF_BENCH_CSV', 'TABPERF_BENCH_THREADS', 'DX_RAPIER_COUNTERS') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
-      if ($t -eq 'chipmunk' -or $t -eq 'rapier') {
+      if ($currentEngines -contains $t) {
         $env:TABPERF_ENGINE = $t; $env:TABPERF_RENDERER = $(if ($Renderer) { $Renderer } elseif ($Dxvk) { 'dxvk' } else { 'd3d9' })
         if ($Diag) {
           $env:TABPERF_BENCH = '1'; $env:TABPERF_BENCH_CSV = Join-Path $OutDir "$t-diag-$r.csv"; $env:TABPERF_BENCH_THREADS = "$Threads"

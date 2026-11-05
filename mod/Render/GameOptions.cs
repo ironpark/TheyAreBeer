@@ -138,11 +138,11 @@ namespace Billions
 
             title(Lang.T("물리", "Physics"));
             var engine = combo("physicsEngine", true, MiniJson.Str(cfg, "physicsEngine", "chipmunk").Trim().ToLowerInvariant(),
-                new object[] { "chipmunk", "rapier", "original" },
-                new[] { Lang.T("Chipmunk2D 다중 코어(기본)", "Chipmunk2D multi-core (default)"), "Rapier 2D", Lang.T("원작 엔진", "Original engine") });
+                new object[] { "chipmunk", "rapier", "chipmunk-vulkan", "original" },
+                new[] { Lang.T("Chipmunk2D 다중 코어(기본)", "Chipmunk2D multi-core (default)"), "Rapier 2D", "Chipmunk2D Vulkan (GPU)", Lang.T("원작 엔진", "Original engine") });
             row(Lang.T("물리 엔진", "Physics engine"), Lang.T(
-                "좀비와 건물의 충돌을 계산하는 엔진입니다. Chipmunk2D 다중 코어가 기본이고, Rapier 2D는 좀비가 아주 많을 때 더 빠릅니다. 원작 엔진은 이 모드의 물리 최적화를 끕니다.",
-                "The engine that computes collisions. Chipmunk2D multi-core is the default; Rapier 2D is faster with very large hordes. Original turns this mod's physics changes off.") + restart, engine.Box);
+                "좀비와 건물의 충돌을 계산하는 엔진입니다. Chipmunk2D 다중 코어가 기본이고, Rapier 2D는 좀비가 아주 많을 때 더 빠릅니다. Chipmunk2D Vulkan은 물리 단계를 그래픽 카드(Vulkan)에서 계산합니다(쓸 수 있는 Vulkan 장치가 없으면 Chipmunk2D 다중 코어). 원작 엔진은 이 모드의 물리 최적화를 끕니다.",
+                "The engine that computes collisions. Chipmunk2D multi-core is the default; Rapier 2D is faster with very large hordes. Chipmunk2D Vulkan runs the physics step on the graphics card (Vulkan; without a usable Vulkan device, Chipmunk2D multi-core is used). Original turns this mod's physics changes off.") + restart, engine.Box);
             var threads = combo("physicsThreads", false, (object)Features.PhysicsThreads,
                 new object[] { 0, 1, 2, 4, 6, 8, 12, 16 }, new[] { Lang.T("자동(기본)", "Auto (default)"), Lang.T("1 (다중 코어 끔)", "1 (no multi-core)"), "2", "4", "6", "8", "12", "16" });
             threads.OnApply = v => Features.SetPhysicsThreads((int)v);

@@ -1,0 +1,748 @@
+// Chipmunk2DVulkan: the physics step of DXPhysicsNative.dll as Vulkan compute kernels.
+// One source, one kernel per K_* define (scripts\build.ps1 compiles each with glslang into an embedded SPIR-V array).
+// The math follows Chipmunk2D 7 (cpSpaceStep.c, cpArbiter.c, cpBody.c, cpCollision.c): positions are integrated
+// first with the velocity and bias velocity of the previous step, then contacts are found, prestepped, velocities
+// integrated (damping, gravity, force), cached impulses applied and the normal impulses iterated. Shapes have no
+// friction or elasticity in this game (the wrapper sets u = 0, e is 0), so only normal and bias impulses exist.
+// The impulse iterations are Gauss-Seidel like Chipmunk's, run colour by colour: after the narrowphase every contact
+// gets a colour so that no dynamic body is in two contacts of one colour (K_COLOR, greedy with atomic claims), and
+// the contacts of one colour are solved in parallel against the velocities the previous colours left. Contacts that
+// find no free colour among the 32 (a body touching more than about 32 others) are solved last in each pass, Jacobi
+// with mass splitting (each body's inverse mass and inertia multiplied by its count of such contacts) and per-body
+// sums in fixed-point integer atomics. The colouring depends on thread timing, so steps are not bit-reproducible.
+// Layouts must match cpvk_gpu.h.
+#version 450
+layout(local_size_x = 256) in;
+
+struct Body { vec2 p; vec2 v; vec2 f; float a; float w; float t; float m_inv; float i_inv; uint flags; };
+struct Shape { uint body; uint flags; float r; float hx; float hy; uint cat; uint mask; uint gen; };
+struct ShapePatch { uint slot; uint pad0; uint pad1; uint pad2; Shape s; };
+struct BodyPatch { uint slot; uint keepPos; uint pad1; uint pad2; Body b; };
+struct Contact {
+	uint ba; uint bb; uint flags; uint partner;
+	vec2 n; float dist0; float dist1;
+	vec2 r1a; vec2 r2a;
+	vec2 r1b; vec2 r2b;
+	float jn0; float jn1; float jb0; float jb1;
+	float nm0; float nm1; float bias0; float bias1;
+	uint owner; uint pgen; uint color; uint pad1;
+};
+struct Warm { uint partner; uint pgen; float jn0; float jn1; };
+struct StaticRec { vec4 bb; uint shape; uint pad0; uint pad1; uint pad2; };
+struct CbPair { uint a; uint b; uint ga; uint gb; uint contact; uint pad0; uint pad1; uint pad2; };
+
+#define BT_MASK 3u
+#define BT_NONE 0u
+#define BT_DYNAMIC 1u
+#define BT_KINEMATIC 2u
+#define BT_STATIC 3u
+#define BF_FRESH 4u
+
+#define SK_MASK 3u
+#define SK_CIRCLE 1u
+#define SK_BOX 2u
+#define SF_SENSOR 4u
+#define SF_CB_SHIFT 3u   // 2 bits: 0 = collision type 0, 1 = type 1, 2 = any other type
+
+#define CF_NPTS 3u
+#define CF_ACTIVE 4u
+
+#define MAX_LEVEL 15
+#define STATIC_SALT 85   // cpvk_gpu.h CVK_STATIC_SALT
+
+#define NCOLORS 32u
+#define C_OVERFLOW 32u   // contacts without a colour
+#define G_CCOUNT 64u     // glob: contacts per colour (33)
+#define G_CCURSOR 128u   // glob: scatter cursors per colour (33)
+
+layout(std430, binding = 0) buffer Bodies { Body bodies[]; };
+layout(std430, binding = 1) buffer Biases { vec4 bias[]; };
+layout(std430, binding = 2) buffer Accs { int acc[]; };            // 8 ints per body: dv.x dv.y dw count | dvb.x dvb.y dwb -
+layout(std430, binding = 3) buffer Shapes { Shape shapes[]; };
+layout(std430, binding = 4) buffer ShapePatches { ShapePatch spatch[]; };
+layout(std430, binding = 5) buffer ShapeBBs { vec4 sbb[]; };
+layout(std430, binding = 6) buffer ShapeCells { ivec4 scell[]; };   // cell x, cell y, level (-1 = not in the grid), bucket
+layout(std430, binding = 7) buffer GridStart { uint gstart[]; };    // per bucket: counts, then (scanned) starts; [H] = total
+layout(std430, binding = 8) buffer GridCursor { uint gcursor[]; };
+layout(std430, binding = 9) buffer EntryShape { uint eshape[]; };
+layout(std430, binding = 10) buffer EntryKey { ivec2 ekey[]; };
+layout(std430, binding = 11) buffer StaticStart { uint sstart[]; };
+layout(std430, binding = 12) buffer StaticItems { uint sitems[]; };
+layout(std430, binding = 13) buffer StaticRecs { StaticRec srec[]; };
+layout(std430, binding = 14) buffer OwnerStart { uint ostart[]; }; // per shape: contact counts, then starts; [n] = total
+layout(std430, binding = 15) buffer Contacts { Contact con[]; };
+layout(std430, binding = 16) buffer CbPairs { CbPair cbp[]; };
+layout(std430, binding = 17) buffer Globals { uint glob[]; };     // 0 level occupancy, 1 callback pairs, 2 callback overflow, G_CCOUNT, G_CCURSOR
+layout(std430, binding = 18) buffer WarmPrev { Warm wprev[]; };
+layout(std430, binding = 19) buffer WarmCur { Warm wcur[]; };
+layout(std430, binding = 20) buffer OwnerPrevStart { uint oprev[]; };
+layout(std430, binding = 21) buffer OwnerGenCur { uint ogen[]; };
+layout(std430, binding = 22) buffer OwnerGenPrev { uint ogenprev[]; };
+layout(std430, binding = 23) buffer DisableList { uint dlist[]; };
+layout(std430, binding = 24) buffer BodyPatches { BodyPatch bpatch[]; };
+layout(std430, binding = 25) buffer BodyOut { vec4 bout[]; };      // 2 per body: p, v | a, w, -, -
+layout(std430, binding = 26) buffer ScanBlocks { uint sblocks[]; };
+layout(std430, binding = 27) buffer ColorMask { uint cmask[]; };    // per body: colours taken by its contacts
+layout(std430, binding = 28) buffer ColorList { uint clist[]; };    // contact indices sorted by colour
+
+layout(push_constant) uniform Push {
+	uint n; uint nBodies; uint nShapes; uint hmask;
+	uint hsmask; uint mode; uint aux; uint aux2;
+	float dt; float damping; float biasCoef; float slop;
+	float dtCoef; float gx; float gy; float cell0;
+	float scell; float qscale; float iqscale; uint cbCap;
+} pc;
+
+uint gid() { return gl_GlobalInvocationID.x; }
+
+uint hash3(int x, int y, int l) { return (uint(x) * 73856093u) ^ (uint(y) * 19349663u) ^ (uint(l) * 83492791u); }
+float cross2(vec2 a, vec2 b) { return a.x * b.y - a.y * b.x; }
+vec2 perp(vec2 v) { return vec2(-v.y, v.x); }
+vec2 rot(vec2 v, vec2 cs) { return vec2(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x); }
+vec2 unrot(vec2 v, vec2 cs) { return vec2(v.x * cs.x + v.y * cs.y, -v.x * cs.y + v.y * cs.x); }
+bool movable(Body b) { return b.m_inv != 0.0 || b.i_inv != 0.0; }   // takes impulses (finite mass or inertia)
+bool sane(vec4 b) { return all(lessThan(abs(b), vec4(1.0e6))) && b.x <= b.z && b.y <= b.w; }
+
+#ifdef K_SHAPE_SCATTER
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	shapes[spatch[i].slot] = spatch[i].s;
+}
+#endif
+
+#ifdef K_BODY_PATCH
+// Bodies the game changed from a collision callback between the two halves of the step: their new velocity,
+// force, mass and type are used by the rest of the step. keepPos: the position was not set, keep the integrated one.
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	uint s = bpatch[i].slot; Body nb = bpatch[i].b;
+	if (bpatch[i].keepPos != 0u) { nb.p = bodies[s].p; nb.a = bodies[s].a; }
+	bodies[s] = nb;
+}
+#endif
+
+#ifdef K_INTEGRATE_POS
+// cpBodyUpdatePosition: p += (v + v_bias) dt, a += (w + w_bias) dt.
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	Body b = bodies[i];
+	uint t = b.flags & BT_MASK;
+	vec4 bs = ((b.flags & BF_FRESH) != 0u) ? vec4(0.0) : bias[i];
+	if (t == BT_DYNAMIC || t == BT_KINEMATIC)
+	{
+		b.p += (b.v + bs.xy) * pc.dt;
+		b.a += (b.w + bs.z) * pc.dt;
+		bodies[i].p = b.p; bodies[i].a = b.a;
+	}
+	// The bias velocities are cleared by the second half (a fill), so this half can be run again with larger buffers.
+	// Per-body accumulators and contact counts start at zero.
+	for (int k = 0; k < 8; k++) acc[i * 8u + uint(k)] = 0;
+}
+#endif
+
+#ifdef K_SHAPE_UPDATE
+// Shape bounding boxes (cpShapeCacheBB) and the grid cell of every non-static shape: the shape goes into the
+// finest level whose cell is at least as large as its box, by the cell of its box center.
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	Shape s = shapes[i];
+	uint kind = s.flags & SK_MASK;
+	scell[i] = ivec4(0, 0, -1, 0);
+	if (kind == 0u) { sbb[i] = vec4(1.0, 1.0, -1.0, -1.0); return; }
+	Body b = bodies[s.body];
+	uint bt = b.flags & BT_MASK;
+	if (bt == BT_NONE) { sbb[i] = vec4(1.0, 1.0, -1.0, -1.0); return; }
+	vec4 bb;
+	if (kind == SK_CIRCLE) bb = vec4(b.p - vec2(s.r), b.p + vec2(s.r));
+	else
+	{
+		vec2 cs = vec2(cos(b.a), sin(b.a));
+		vec2 e = vec2(abs(cs.x) * s.hx + abs(cs.y) * s.hy, abs(cs.y) * s.hx + abs(cs.x) * s.hy) + vec2(s.r);
+		bb = vec4(b.p - e, b.p + e);
+	}
+	sbb[i] = bb;
+	if (bt == BT_STATIC || !sane(bb)) return;
+	float ext = max(bb.z - bb.x, bb.w - bb.y);
+	int level = 0; float cell = pc.cell0;
+	while (cell < ext && level < MAX_LEVEL) { cell *= 2.0; level++; }
+	vec2 c = (bb.xy + bb.zw) * 0.5;
+	int cx = int(floor(c.x / cell)), cy = int(floor(c.y / cell));
+	uint bucket = hash3(cx, cy, level) & pc.hmask;
+	scell[i] = ivec4(cx, cy, level, int(bucket));
+	atomicOr(glob[0], 1u << uint(level));
+}
+#endif
+
+#ifdef K_GRID_COUNT
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	ivec4 c = scell[i]; if (c.z < 0) return;
+	atomicAdd(gstart[uint(c.w)], 1u);
+}
+#endif
+
+#ifdef K_GRID_SCATTER
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	ivec4 c = scell[i]; if (c.z < 0) return;
+	uint pos = atomicAdd(gcursor[uint(c.w)], 1u);
+	eshape[pos] = i;
+	ekey[pos] = ivec2(c.x, (c.y << 4) | c.z);
+}
+#endif
+
+#ifdef K_GRID_SORT
+// Entries of a bucket in shape order, so that pair search and queries visit them in a fixed order.
+void main()
+{
+	uint b = gid(); if (b >= pc.n) return;
+	uint s = gstart[b], e = gstart[b + 1u];
+	for (uint k = s + 1u; k < e; k++)
+	{
+		uint v = eshape[k]; ivec2 kv = ekey[k];
+		uint j = k;
+		while (j > s && eshape[j - 1u] > v) { eshape[j] = eshape[j - 1u]; ekey[j] = ekey[j - 1u]; j--; }
+		eshape[j] = v; ekey[j] = kv;
+	}
+}
+#endif
+
+#ifdef K_SCAN
+// Exclusive prefix sum in place, 1024 values per workgroup. aux 0 = grid buckets, 1 = contacts per owner shape.
+// mode 0: scan each block, block totals to sblocks; mode 1: scan sblocks (one workgroup, at most 1024 blocks) and
+// write the grand total to data[n]; mode 2: add the block offsets.
+shared uint sh[256];
+uint ld(uint i) { return pc.aux == 0u ? gstart[i] : ostart[i]; }
+void st(uint i, uint v) { if (pc.aux == 0u) gstart[i] = v; else ostart[i] = v; }
+void main()
+{
+	uint t = gl_LocalInvocationID.x, g = gl_WorkGroupID.x;
+	if (pc.mode == 0u || pc.mode == 1u)
+	{
+		uint cnt = pc.mode == 0u ? pc.n : pc.aux2;
+		uint base = pc.mode == 0u ? g * 1024u + t * 4u : t * 4u;
+		uint v[4]; uint sum = 0u;
+		for (uint k = 0u; k < 4u; k++)
+		{
+			uint idx = base + k;
+			uint x = idx < cnt ? (pc.mode == 0u ? ld(idx) : sblocks[idx]) : 0u;
+			v[k] = sum; sum += x;
+		}
+		sh[t] = sum; barrier();
+		for (uint off = 1u; off < 256u; off <<= 1u)
+		{
+			uint add = t >= off ? sh[t - off] : 0u;
+			barrier(); sh[t] += add; barrier();
+		}
+		uint excl = sh[t] - sum;
+		for (uint k = 0u; k < 4u; k++)
+		{
+			uint idx = base + k;
+			if (idx < cnt) { if (pc.mode == 0u) st(idx, v[k] + excl); else sblocks[idx] = v[k] + excl; }
+		}
+		if (t == 255u)
+		{
+			if (pc.mode == 0u) sblocks[g] = sh[255];
+			else st(pc.n, sh[255]);
+		}
+	}
+	else
+	{
+		uint off = sblocks[g];
+		for (uint k = 0u; k < 4u; k++) { uint idx = g * 1024u + t * 4u + k; if (idx < pc.n) st(idx, ld(idx) + off); }
+	}
+}
+#endif
+
+#if defined(K_NARROW_COUNT) || defined(K_NARROW_WRITE)
+struct Hit { uint npts; vec2 n; vec2 p1a; vec2 p2a; vec2 p1b; vec2 p2b; float d0; float d1; };
+
+// cpCollision CircleToCircle: normal from a to b, points on the two surfaces.
+bool circleCircle(vec2 ca, float ra, vec2 cb, float rb, inout Hit h)
+{
+	vec2 d = cb - ca; float mind = ra + rb; float d2 = dot(d, d);
+	if (!(d2 < mind * mind)) return false;
+	float dist = sqrt(d2);
+	vec2 n = dist > 0.0 ? d / dist : vec2(1.0, 0.0);
+	h.npts = 1u; h.n = n; h.p1a = ca + n * ra; h.p2a = cb - n * rb; h.d0 = dist - mind;
+	return true;
+}
+
+// Circle (a) against a box (b) with rounded corners (core half extents he, radius rbox).
+bool circleBox(vec2 ca, float ra, vec2 pb, vec2 cs, vec2 he, float rbox, inout Hit h)
+{
+	vec2 q = unrot(ca - pb, cs);
+	vec2 c = clamp(q, -he, he);
+	vec2 nl; float sep;
+	if (q.x > -he.x && q.x < he.x && q.y > -he.y && q.y < he.y)
+	{
+		float dx = he.x - abs(q.x), dy = he.y - abs(q.y);
+		if (dx < dy) { nl = vec2(q.x < 0.0 ? -1.0 : 1.0, 0.0); c = vec2(nl.x * he.x, q.y); sep = -dx; }
+		else { nl = vec2(0.0, q.y < 0.0 ? -1.0 : 1.0); c = vec2(q.x, nl.y * he.y); sep = -dy; }
+	}
+	else
+	{
+		vec2 d = q - c; float l = length(d);
+		nl = l > 0.0 ? d / l : vec2(1.0, 0.0); sep = l;
+	}
+	float s = sep - ra - rbox;
+	if (!(s < 0.0)) return false;
+	vec2 nOut = rot(nl, cs);          // from the box toward the circle
+	vec2 n = -nOut;                   // from a (circle) to b (box)
+	vec2 core = pb + rot(c, cs);
+	h.npts = 1u; h.n = n; h.p1a = ca + n * ra; h.p2a = core + nOut * rbox; h.d0 = s;
+	return true;
+}
+
+// Two boxes (sharp, half extents including the rounding): separating axes, reference face, clipped incident edge.
+void boxAxes(vec2 cs, out vec2 ax0, out vec2 ax1) { ax0 = vec2(cs.x, cs.y); ax1 = vec2(-cs.y, cs.x); }
+float boxProj(vec2 he, vec2 a0, vec2 a1, vec2 n) { return he.x * abs(dot(a0, n)) + he.y * abs(dot(a1, n)); }
+bool boxBox(vec2 pa, vec2 csa, vec2 ha, vec2 pb, vec2 csb, vec2 hb, inout Hit h)
+{
+	vec2 a0, a1, b0, b1; boxAxes(csa, a0, a1); boxAxes(csb, b0, b1);
+	vec2 d = pb - pa;
+	vec2 axes[4] = vec2[4](a0, a1, b0, b1);
+	float best = 1.0e30; int bi = 0; vec2 bn = vec2(1.0, 0.0);
+	for (int k = 0; k < 4; k++)
+	{
+		vec2 ax = axes[k];
+		float ov = boxProj(ha, a0, a1, ax) + boxProj(hb, b0, b1, ax) - abs(dot(d, ax));
+		if (!(ov > 0.0)) return false;
+		// prefer the faces of a slightly so the result is stable when both are equal
+		float score = k < 2 ? ov : ov * 1.0001;
+		if (score < best) { best = score; bi = k; bn = dot(d, ax) < 0.0 ? -ax : ax; }
+	}
+	// reference box: the one whose face normal won; normal from a to b
+	bool refA = bi < 2;
+	vec2 pr = refA ? pa : pb, pi = refA ? pb : pa;
+	vec2 r0 = refA ? a0 : b0, r1 = refA ? a1 : b1, i0 = refA ? b0 : a0, i1 = refA ? b1 : a1;
+	vec2 hr = refA ? ha : hb, hi = refA ? hb : ha;
+	vec2 nr = refA ? bn : -bn;        // reference face normal, pointing at the incident box
+	int ra = (bi & 1);                // axis index of the reference face in its box
+	float hrN = ra == 0 ? hr.x : hr.y, hrT = ra == 0 ? hr.y : hr.x;
+	vec2 tr = ra == 0 ? r1 : r0;      // reference face tangent
+	// incident face: the face of the other box most anti-parallel to nr
+	float di0 = dot(i0, nr), di1 = dot(i1, nr);
+	vec2 inN; vec2 inT; float inHN, inHT;
+	if (abs(di0) > abs(di1)) { inN = di0 > 0.0 ? -i0 : i0; inT = i1; inHN = hi.x; inHT = hi.y; }
+	else { inN = di1 > 0.0 ? -i1 : i1; inT = i0; inHN = hi.y; inHT = hi.x; }
+	vec2 fc = pi + inN * inHN;
+	vec2 v0 = fc + inT * inHT, v1 = fc - inT * inHT;
+	// clip the incident edge to the reference face's side planes
+	vec2 rc = pr + nr * hrN;
+	float c0 = dot(v0 - pr, tr), c1 = dot(v1 - pr, tr);
+	if (c0 > hrT) { if (c1 > hrT) return false; v0 = v1 + (v0 - v1) * ((hrT - c1) / (c0 - c1)); c0 = hrT; }
+	if (c1 > hrT) { v1 = v0 + (v1 - v0) * ((hrT - c0) / (c1 - c0)); c1 = hrT; }
+	if (c0 < -hrT) { if (c1 < -hrT) return false; v0 = v1 + (v0 - v1) * ((-hrT - c1) / (c0 - c1)); }
+	if (c1 < -hrT) { v1 = v0 + (v1 - v0) * ((-hrT - c0) / (c1 - c0)); }
+	float s0 = dot(v0 - rc, nr), s1 = dot(v1 - rc, nr);
+	h.npts = 0u; h.n = bn;
+	vec2 pts[2] = vec2[2](v0, v1); float ss[2] = float[2](s0, s1);
+	for (int k = 0; k < 2; k++)
+	{
+		if (!(ss[k] < 0.0)) continue;
+		vec2 onInc = pts[k], onRef = pts[k] - nr * ss[k];
+		vec2 p1 = refA ? onRef : onInc, p2 = refA ? onInc : onRef;
+		if (h.npts == 0u) { h.p1a = p1; h.p2a = p2; h.d0 = ss[k]; }
+		else { h.p1b = p1; h.p2b = p2; h.d1 = ss[k]; }
+		h.npts++;
+	}
+	return h.npts > 0u;
+}
+
+bool collide(Shape sa, Body ba, Shape sb, Body bb, out Hit h)
+{
+	uint ka = sa.flags & SK_MASK, kb = sb.flags & SK_MASK;
+	h.npts = 0u; h.n = vec2(1.0, 0.0); h.p1a = h.p2a = h.p1b = h.p2b = vec2(0.0); h.d0 = h.d1 = 0.0;
+	if (ka == SK_CIRCLE && kb == SK_CIRCLE) return circleCircle(ba.p, sa.r, bb.p, sb.r, h);
+	if (ka == SK_CIRCLE && kb == SK_BOX) return circleBox(ba.p, sa.r, bb.p, vec2(cos(bb.a), sin(bb.a)), vec2(sb.hx, sb.hy), sb.r, h);
+	if (ka == SK_BOX && kb == SK_CIRCLE)
+	{
+		if (!circleBox(bb.p, sb.r, ba.p, vec2(cos(ba.a), sin(ba.a)), vec2(sa.hx, sa.hy), sa.r, h)) return false;
+		vec2 t = h.p1a; h.p1a = h.p2a; h.p2a = t; h.n = -h.n;
+		return true;
+	}
+	return boxBox(ba.p, vec2(cos(ba.a), sin(ba.a)), vec2(sa.hx, sa.hy) + vec2(sa.r), bb.p, vec2(cos(bb.a), sin(bb.a)), vec2(sb.hx, sb.hy) + vec2(sb.r), h);
+}
+
+// The game's filter (the original DLL's cpShapeFilterReject): collide when either category/mask direction matches.
+bool filterPass(Shape a, Shape b) { return ((a.cat & b.mask) | (b.cat & a.mask)) != 0u; }
+// The wrapper's only collision handler is for collision types 1 and 0: begin and separate callbacks.
+bool cbPair(Shape a, Shape b)
+{
+	uint ca = (a.flags >> SF_CB_SHIFT) & 3u, cb = (b.flags >> SF_CB_SHIFT) & 3u;
+	return (ca == 0u && cb == 1u) || (ca == 1u && cb == 0u);
+}
+
+uint g_count; uint g_base;
+Shape g_s; Body g_b; vec4 g_bb; uint g_i;
+
+void pairWith(uint j, vec4 bbj)
+{
+	if (bbj.z < g_bb.x || g_bb.z < bbj.x || bbj.w < g_bb.y || g_bb.w < bbj.y) return;
+	Shape sj = shapes[j];
+	if ((sj.flags & SK_MASK) == 0u || sj.body == g_s.body) return;
+	if (!filterPass(g_s, sj)) return;
+	Body bj = bodies[sj.body];
+	uint ti = g_b.flags & BT_MASK, tj = bj.flags & BT_MASK;
+	if (tj == BT_NONE) return;
+	bool cb = cbPair(g_s, sj);
+	bool solve = ((g_s.flags | sj.flags) & SF_SENSOR) == 0u && (ti == BT_DYNAMIC || tj == BT_DYNAMIC);
+	if (!cb && !solve) return;
+	Hit h;
+	if (!collide(g_s, g_b, sj, bj, h)) return;
+#ifdef K_NARROW_COUNT
+	if (solve) g_count++;
+#else
+	uint ci = 0xFFFFFFFFu;
+	if (solve && g_base + g_count < pc.mode)   // mode: contact capacity (the count pass gave the exact number)
+	{
+		ci = g_base + g_count; g_count++;
+		Contact c;
+		c.ba = g_s.body; c.bb = sj.body; c.flags = h.npts | CF_ACTIVE; c.partner = j;
+		c.n = h.n; c.dist0 = h.d0; c.dist1 = h.d1;
+		c.r1a = h.p1a - g_b.p; c.r2a = h.p2a - bj.p; c.r1b = h.p1b - g_b.p; c.r2b = h.p2b - bj.p;
+		c.jn0 = 0.0; c.jn1 = 0.0; c.jb0 = 0.0; c.jb1 = 0.0; c.nm0 = 0.0; c.nm1 = 0.0; c.bias0 = 0.0; c.bias1 = 0.0;
+		c.owner = g_i; c.pgen = sj.gen; c.color = C_OVERFLOW; c.pad1 = 0u;
+		// warm start (cpArbiterUpdate): the impulses of the same pair in the previous step
+		if (g_i < pc.aux2 && ogenprev[g_i] == g_s.gen)
+		{
+			for (uint k = oprev[g_i]; k < oprev[g_i + 1u]; k++)
+				if (wprev[k].partner == j && wprev[k].pgen == sj.gen) { c.jn0 = wprev[k].jn0; c.jn1 = h.npts > 1u ? wprev[k].jn1 : 0.0; break; }
+		}
+		con[ci] = c;
+	}
+	if (cb)
+	{
+		uint k = atomicAdd(glob[1], 1u);
+		if (k < pc.cbCap) { CbPair p; p.a = g_i; p.b = j; p.ga = g_s.gen; p.gb = sj.gen; p.contact = ci; p.pad0 = p.pad1 = p.pad2 = 0u; cbp[k] = p; }
+		else atomicAdd(glob[2], 1u);
+	}
+#endif
+}
+
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	g_count = 0u; g_i = i;
+#ifdef K_NARROW_WRITE
+	g_base = ostart[i];
+	ogen[i] = shapes[i].gen;
+#endif
+	ivec4 cell = scell[i];
+	if (cell.z >= 0)
+	{
+		g_s = shapes[i]; g_b = bodies[g_s.body]; g_bb = sbb[i];
+		uint occ = glob[0];
+		vec2 c = (g_bb.xy + g_bb.zw) * 0.5;
+		float size = pc.cell0 * float(1 << cell.z);
+		for (int L = cell.z; L <= MAX_LEVEL; L++, size *= 2.0)
+		{
+			if ((occ & (1u << uint(L))) == 0u) continue;
+			int cx = int(floor(c.x / size)), cy = int(floor(c.y / size));
+			for (int dy = -1; dy <= 1; dy++)
+				for (int dx = -1; dx <= 1; dx++)
+				{
+					int x = cx + dx, y = cy + dy;
+					uint b = hash3(x, y, L) & pc.hmask;
+					ivec2 key = ivec2(x, (y << 4) | L);
+					for (uint e = gstart[b]; e < gstart[b + 1u]; e++)
+					{
+						if (ekey[e] != key) continue;
+						uint j = eshape[e];
+						if (j == i || (L == cell.z && j < i)) continue;
+						pairWith(j, sbb[j]);
+					}
+				}
+		}
+		// static shapes: every static grid cell under the box; a static shape is taken in the cell that holds the
+		// low corner of the two boxes' overlap, so one found in several cells is taken once
+		if (pc.hsmask != 0u)
+		{
+			int x0 = int(floor(g_bb.x / pc.scell)), x1 = int(floor(g_bb.z / pc.scell));
+			int y0 = int(floor(g_bb.y / pc.scell)), y1 = int(floor(g_bb.w / pc.scell));
+			if ((x1 - x0 + 1) * (y1 - y0 + 1) <= 65536)
+				for (int y = y0; y <= y1; y++)
+					for (int x = x0; x <= x1; x++)
+					{
+						uint b = hash3(x, y, STATIC_SALT) & pc.hsmask;
+						for (uint e = sstart[b]; e < sstart[b + 1u]; e++)
+						{
+							StaticRec r = srec[sitems[e]];
+							vec2 corner = max(g_bb.xy, r.bb.xy);
+							if (int(floor(corner.x / pc.scell)) != x || int(floor(corner.y / pc.scell)) != y) continue;
+							pairWith(r.shape, r.bb);
+						}
+					}
+		}
+	}
+#ifdef K_NARROW_COUNT
+	ostart[i] = g_count;
+#endif
+}
+#endif
+
+#if defined(K_COLOR) || defined(K_COLOR_SCATTER)
+// Contacts of the narrowphase: ostart[nShapes] is the total, pc.mode the capacity (an overflowing step is rerun).
+bool contactIndex(out uint i) { i = gid(); uint total = ostart[pc.nShapes]; return i < total && total <= pc.mode; }
+#endif
+
+#ifdef K_COLOR
+// Greedy colouring: the lowest colour free on both dynamic bodies, claimed with atomicOr on each body's mask. A claim
+// that loses on the second body is given back; every colour is tried at most once, so a contact takes <= 32 rounds.
+// Bodies that take no impulses (infinite mass) do not limit the colour.
+void main()
+{
+	uint i; if (!contactIndex(i)) return;
+	uint ba = con[i].ba, bb = con[i].bb;
+	bool ma = movable(bodies[ba]), mb = movable(bodies[bb]);
+	uint color = C_OVERFLOW, tried = 0u;
+	for (uint round = 0u; round < NCOLORS; round++)
+	{
+		uint used = tried | (ma ? cmask[ba] : 0u) | (mb ? cmask[bb] : 0u);
+		if (used == 0xFFFFFFFFu) break;
+		uint bit = uint(findLSB(~used)), m = 1u << bit;
+		tried |= m;
+		if (ma && (atomicOr(cmask[ba], m) & m) != 0u) continue;
+		if (mb && (atomicOr(cmask[bb], m) & m) != 0u) { if (ma) atomicAnd(cmask[ba], ~m); continue; }
+		color = bit; break;
+	}
+	con[i].color = color;
+	atomicAdd(glob[G_CCOUNT + color], 1u);
+}
+#endif
+
+#ifdef K_COLOR_SCATTER
+void main()
+{
+	uint i; if (!contactIndex(i)) return;
+	uint color = con[i].color, start = 0u;
+	for (uint k = 0u; k < color; k++) start += glob[G_CCOUNT + k];
+	clist[start + atomicAdd(glob[G_CCURSOR + color], 1u)] = i;
+}
+#endif
+
+#ifdef K_DISABLE
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	uint c = dlist[i];
+	con[c].flags &= ~CF_ACTIVE;
+}
+#endif
+
+#ifdef K_COUNT
+// Uncoloured contacts per body, for mass splitting (pc.aux2: their start in clist).
+void main()
+{
+	if (gid() >= pc.n) return;
+	uint i = clist[pc.aux2 + gid()];
+	if ((con[i].flags & CF_ACTIVE) == 0u) return;
+	atomicAdd(acc[con[i].ba * 8u + 3u], 1);
+	atomicAdd(acc[con[i].bb * 8u + 3u], 1);
+}
+#endif
+
+#ifdef K_PRESTEP
+// cpArbiterPreStep: effective mass along the normal and the bias velocity that removes the overlap beyond the slop.
+float kn(Body a, Body b, float ca, float cb, vec2 r1, vec2 r2, vec2 n)
+{
+	float r1cn = cross2(r1, n), r2cn = cross2(r2, n);
+	return a.m_inv * ca + b.m_inv * cb + a.i_inv * ca * r1cn * r1cn + b.i_inv * cb * r2cn * r2cn;
+}
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	Contact c = con[i];
+	if ((c.flags & CF_ACTIVE) == 0u) return;
+	Body a = bodies[c.ba], b = bodies[c.bb];
+	// mass splitting only for the uncoloured contacts (Jacobi); coloured ones see each body whole
+	bool split = c.color == C_OVERFLOW;
+	float ca = split ? float(max(acc[c.ba * 8u + 3u], 1)) : 1.0, cb = split ? float(max(acc[c.bb * 8u + 3u], 1)) : 1.0;
+	float k0 = kn(a, b, ca, cb, c.r1a, c.r2a, c.n);
+	if (!(k0 > 0.0) || isinf(k0)) { con[i].flags = c.flags & ~CF_ACTIVE; return; }
+	con[i].nm0 = 1.0 / k0;
+	con[i].bias0 = -pc.biasCoef * min(0.0, c.dist0 + pc.slop) / pc.dt;
+	con[i].jb0 = 0.0;
+	if ((c.flags & CF_NPTS) > 1u)
+	{
+		float k1 = kn(a, b, ca, cb, c.r1b, c.r2b, c.n);
+		con[i].nm1 = k1 > 0.0 ? 1.0 / k1 : 0.0;
+		con[i].bias1 = -pc.biasCoef * min(0.0, c.dist1 + pc.slop) / pc.dt;
+		con[i].jb1 = 0.0;
+	}
+}
+#endif
+
+#ifdef K_INTEGRATE_VEL
+// cpBodyUpdateVelocity: dynamic bodies only; the force and torque are reset afterwards.
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	Body b = bodies[i];
+	if ((b.flags & BT_MASK) != BT_DYNAMIC) return;
+	b.v = b.v * pc.damping + (vec2(pc.gx, pc.gy) + b.f * b.m_inv) * pc.dt;
+	b.w = b.w * pc.damping + b.t * b.i_inv * pc.dt;
+	bodies[i].v = b.v; bodies[i].w = b.w;
+}
+#endif
+
+#if defined(K_WARM) || defined(K_SOLVE)
+int q(float x) { return int(clamp(floor(x * pc.qscale + 0.5), -1.0e9, 1.0e9)); }
+// apply_impulse to body k (only dynamic bodies move): v += j m_inv, w += i_inv cross(r, j); slot 0 = velocity, 4 = bias
+void addImpulse(uint k, Body b, vec2 r, vec2 j, uint slot)
+{
+	if (!movable(b)) return;
+	vec2 dv = j * b.m_inv; float dw = b.i_inv * cross2(r, j);
+	if (dv.x != 0.0) atomicAdd(acc[k * 8u + slot], q(dv.x));
+	if (dv.y != 0.0) atomicAdd(acc[k * 8u + slot + 1u], q(dv.y));
+	if (dw != 0.0) atomicAdd(acc[k * 8u + slot + 2u], q(dw));
+}
+void addPair(Contact c, Body a, Body b, vec2 r1, vec2 r2, vec2 j, uint slot)
+{
+	addImpulse(c.ba, a, r1, -j, slot);
+	addImpulse(c.bb, b, r2, j, slot);
+}
+#endif
+
+#ifdef K_WARM
+// cpArbiterApplyCachedImpulse (scaled by dt / previous dt).
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	Contact c = con[i];
+	if ((c.flags & CF_ACTIVE) == 0u) return;
+	if (c.jn0 == 0.0 && c.jn1 == 0.0) return;
+	Body a = bodies[c.ba], b = bodies[c.bb];
+	addPair(c, a, b, c.r1a, c.r2a, c.n * (c.jn0 * pc.dtCoef), 0u);
+	if ((c.flags & CF_NPTS) > 1u) addPair(c, a, b, c.r1b, c.r2b, c.n * (c.jn1 * pc.dtCoef), 0u);
+}
+#endif
+
+#ifdef K_SOLVE
+// cpArbiterApplyImpulse without friction and bounce, against the velocities of the previous iteration.
+void solvePoint(Contact c, Body a, Body b, vec4 ba, vec4 bb, vec2 r1, vec2 r2, float nm, float biasv, inout float jbAcc, inout float jnAcc)
+{
+	vec2 n = c.n;
+	vec2 vb1 = ba.xy + perp(r1) * ba.z, vb2 = bb.xy + perp(r2) * bb.z;
+	vec2 vr = (b.v + perp(r2) * b.w) - (a.v + perp(r1) * a.w);
+	float vbn = dot(vb2 - vb1, n), vrn = dot(vr, n);
+	float jbn = (biasv - vbn) * nm;
+	float jbOld = jbAcc; jbAcc = max(jbOld + jbn, 0.0);
+	float jn = -vrn * nm;
+	float jnOld = jnAcc; jnAcc = max(jnOld + jn, 0.0);
+	if (jbAcc != jbOld) addPair(c, a, b, r1, r2, n * (jbAcc - jbOld), 4u);
+	if (jnAcc != jnOld) addPair(c, a, b, r1, r2, n * (jnAcc - jnOld), 0u);
+}
+void main()
+{
+	if (gid() >= pc.n) return;
+	uint i = clist[pc.aux2 + gid()];   // the uncoloured contacts
+	Contact c = con[i];
+	if ((c.flags & CF_ACTIVE) == 0u) return;
+	Body a = bodies[c.ba], b = bodies[c.bb];
+	vec4 ba = bias[c.ba], bb = bias[c.bb];
+	float jb = c.jb0, jn = c.jn0;
+	solvePoint(c, a, b, ba, bb, c.r1a, c.r2a, c.nm0, c.bias0, jb, jn);
+	con[i].jb0 = jb; con[i].jn0 = jn;
+	if ((c.flags & CF_NPTS) > 1u)
+	{
+		jb = c.jb1; jn = c.jn1;
+		solvePoint(c, a, b, ba, bb, c.r1b, c.r2b, c.nm1, c.bias1, jb, jn);
+		con[i].jb1 = jb; con[i].jn1 = jn;
+	}
+}
+#endif
+
+#ifdef K_CSOLVE
+// cpArbiterApplyImpulse without friction and bounce for the contacts of one colour (pc.aux2: their start in clist,
+// pc.n: their count): no other contact of the colour moves these bodies, so the velocities are updated in place.
+struct Vel { vec2 v; float w; vec3 vb; };
+void solvePoint(vec2 n, inout Vel sa, inout Vel sb, Body a, Body b, vec2 r1, vec2 r2, float nm, float biasv, inout float jbAcc, inout float jnAcc)
+{
+	vec2 vb1 = sa.vb.xy + perp(r1) * sa.vb.z, vb2 = sb.vb.xy + perp(r2) * sb.vb.z;
+	vec2 vr = (sb.v + perp(r2) * sb.w) - (sa.v + perp(r1) * sa.w);
+	float jbn = (biasv - dot(vb2 - vb1, n)) * nm;
+	float jbOld = jbAcc; jbAcc = max(jbOld + jbn, 0.0);
+	vec2 jb = n * (jbAcc - jbOld);
+	sa.vb.xy -= jb * a.m_inv; sa.vb.z -= a.i_inv * cross2(r1, jb);
+	sb.vb.xy += jb * b.m_inv; sb.vb.z += b.i_inv * cross2(r2, jb);
+	float jn = -dot(vr, n) * nm;
+	float jnOld = jnAcc; jnAcc = max(jnOld + jn, 0.0);
+	vec2 j = n * (jnAcc - jnOld);
+	sa.v -= j * a.m_inv; sa.w -= a.i_inv * cross2(r1, j);
+	sb.v += j * b.m_inv; sb.w += b.i_inv * cross2(r2, j);
+}
+void main()
+{
+	if (gid() >= pc.n) return;
+	uint i = clist[pc.aux2 + gid()];
+	Contact c = con[i];
+	if ((c.flags & CF_ACTIVE) == 0u) return;
+	Body a = bodies[c.ba], b = bodies[c.bb];
+	Vel sa, sb;
+	sa.v = a.v; sa.w = a.w; sa.vb = bias[c.ba].xyz;
+	sb.v = b.v; sb.w = b.w; sb.vb = bias[c.bb].xyz;
+	float jb = c.jb0, jn = c.jn0;
+	solvePoint(c.n, sa, sb, a, b, c.r1a, c.r2a, c.nm0, c.bias0, jb, jn);
+	con[i].jb0 = jb; con[i].jn0 = jn;
+	if ((c.flags & CF_NPTS) > 1u)
+	{
+		jb = c.jb1; jn = c.jn1;
+		solvePoint(c.n, sa, sb, a, b, c.r1b, c.r2b, c.nm1, c.bias1, jb, jn);
+		con[i].jb1 = jb; con[i].jn1 = jn;
+	}
+	// only bodies that take impulses are written (an infinite-mass body may be in many contacts of the colour)
+	if (movable(a)) { bodies[c.ba].v = sa.v; bodies[c.ba].w = sa.w; bias[c.ba].xyz = sa.vb; }
+	if (movable(b)) { bodies[c.bb].v = sb.v; bodies[c.bb].w = sb.w; bias[c.bb].xyz = sb.vb; }
+}
+#endif
+
+#ifdef K_APPLY
+// The sums of this pass's impulses: v += sum, bias velocity += sum; accumulators back to zero (the count stays).
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	uint k = i * 8u;
+	ivec3 dv = ivec3(acc[k], acc[k + 1u], acc[k + 2u]);
+	ivec3 db = ivec3(acc[k + 4u], acc[k + 5u], acc[k + 6u]);
+	if (dv != ivec3(0))
+	{
+		bodies[i].v += vec2(dv.xy) * pc.iqscale; bodies[i].w += float(dv.z) * pc.iqscale;
+		acc[k] = 0; acc[k + 1u] = 0; acc[k + 2u] = 0;
+	}
+	if (db != ivec3(0))
+	{
+		bias[i].xyz += vec3(db) * pc.iqscale;
+		acc[k + 4u] = 0; acc[k + 5u] = 0; acc[k + 6u] = 0;
+	}
+}
+#endif
+
+#ifdef K_OUTPUT
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	Body b = bodies[i];
+	bout[i * 2u] = vec4(b.p, b.v);
+	bout[i * 2u + 1u] = vec4(b.a, b.w, 0.0, 0.0);
+}
+#endif
+
+#ifdef K_WARM_SAVE
+void main()
+{
+	uint i = gid(); if (i >= pc.n) return;
+	Contact c = con[i];
+	Warm w; w.partner = c.partner; w.pgen = c.pgen;
+	bool act = (c.flags & CF_ACTIVE) != 0u;
+	w.jn0 = act ? c.jn0 : 0.0; w.jn1 = act ? c.jn1 : 0.0;
+	wcur[i] = w;
+}
+#endif

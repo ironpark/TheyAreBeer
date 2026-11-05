@@ -1,11 +1,12 @@
 # Install the built TABPerf into the game's Mods folder (the game files are not changed).
-#   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 [-Engine chipmunk|rapier|original] [-Renderer dxvk|d3d9]
+#   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 [-Engine chipmunk|rapier|chipmunk-vulkan|original] [-Renderer dxvk|d3d9]
 #     [-NoDxvk] [-GameDir <folder>]
 #     [-Uninstall]
 # Copies into <game>\Mods\TABPerf:
 #   TABPerf.dll, ModInfos.json                       mod\out
 #   chipmunk\DXPhysicsNative.dll                     native\out (multi-core Chipmunk2D)
 #   rapier\DXPhysicsNative.dll, rapier2d_ffi*.dll    native\out\rapier (Rapier 2D), when built
+#   chipmunk-vulkan\DXPhysicsNative.dll              native\out\chipmunk-vulkan (Chipmunk2D with the step on the GPU), when built
 #   dxvk\d3d9.dll, LICENSE                           DXVK's 64-bit d3d9.dll (Direct3D 9 on Vulkan, the official release in
 #                                                    scripts\lib\dxvk.ps1, downloaded once into native\out\dxvk, checked
 #                                                    by SHA-256)
@@ -17,7 +18,7 @@
 # Direct3D 9). The former "dxvk" setting is removed. -NoDxvk skips DXVK (no download; the mod then uses
 # the system Direct3D 9 when "renderer" is dxvk).
 # -Uninstall removes Mods\TABPerf (settings and logs in %APPDATA%\TABPerf stay).
-param([ValidateSet('', 'chipmunk', 'rapier', 'original')][string]$Engine = '', [ValidateSet('', 'dxvk', 'd3d9')][string]$Renderer = '',
+param([ValidateSet('', 'chipmunk', 'rapier', 'chipmunk-vulkan', 'original')][string]$Engine = '', [ValidateSet('', 'dxvk', 'd3d9')][string]$Renderer = '',
   [switch]$NoDxvk, [string]$GameDir = '', [switch]$Uninstall)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -34,6 +35,7 @@ $modOut = Join-Path $repo 'mod\out'
 $engines = [ordered]@{
   chipmunk = @{ files = @("$out\DXPhysicsNative.dll"); need = 1 }
   rapier   = @{ files = @("$out\rapier\DXPhysicsNative.dll", "$out\rapier\rapier2d_ffi.dll", "$out\rapier\rapier2d_ffi_avx2.dll", "$out\rapier\rapier2d_ffi_avx512.dll"); need = 2 }
+  'chipmunk-vulkan' = @{ files = @("$out\chipmunk-vulkan\DXPhysicsNative.dll"); need = 1 }
 }
 function Test-Built($e) { -not ($engines[$e].files[0..($engines[$e].need - 1)] | Where-Object { -not (Test-Path $_) }) }
 if (-not $Uninstall) {

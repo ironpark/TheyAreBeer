@@ -38,27 +38,34 @@ namespace Billions
             catch (Exception e) { Log.Error("perf OnLoad", e); }
         }
 
-        static readonly string[] Engines = { "chipmunk", "rapier" };
+        static readonly string[] Engines = { "chipmunk", "rapier", "chipmunk-vulkan" };
 
-        // engine.json {"physicsEngine": "chipmunk" | "rapier" | "original"}, or TABPERF_ENGINE; default chipmunk (the multi-core
-        // Chipmunk replacement).
+        // engine.json {"physicsEngine": "chipmunk" | "rapier" | "chipmunk-vulkan" | "original"}, or TABPERF_ENGINE; default
+        // chipmunk (the multi-core Chipmunk replacement).
         static string PhysicsEngine() { return Settings.Str(Settings.Config(), "physicsEngine", "TABPERF_ENGINE", "chipmunk").Trim().ToLowerInvariant(); }
 
-        // Sends the game's physics calls to an engine in the mod folder (<mod>\chipmunk\ or <mod>\rapier\, each in its own
-        // folder so the loader does not try it as a .NET assembly and Rapier finds its rapier2d_ffi.dll next to it):
-        // the chosen one, else Chipmunk. Neither usable: the game folder's DLL.
+        // Sends the game's physics calls to an engine in the mod folder (<mod>\chipmunk\, <mod>\rapier\ or
+        // <mod>\chipmunk-vulkan\, each in its own folder so the loader does not try it as a .NET assembly and Rapier finds its
+        // rapier2d_ffi.dll next to it): the chosen one, else Chipmunk. Chipmunk2DVulkan is skipped when it finds no usable
+        // Vulkan device. None usable: the game folder's DLL.
         static void Redirect(Harmony h, string modPath)
         {
             if (modPath == null) return;
             string engine = PhysicsEngine();
             if (engine == "original") { Log.Info("물리 엔진 original — 게임 폴더의 물리 DLL 을 쓴다"); return; }
-            if (Array.IndexOf(Engines, engine) < 0) { Log.Info("물리 엔진 \"" + engine + "\" 은 모름 — chipmunk 를 쓴다(chipmunk · rapier · original)"); engine = "chipmunk"; }
+            if (Array.IndexOf(Engines, engine) < 0) { Log.Info("물리 엔진 \"" + engine + "\" 은 모름 — chipmunk 를 쓴다(chipmunk · rapier · chipmunk-vulkan · original)"); engine = "chipmunk"; }
             var order = new List<string> { engine }; if (engine != "chipmunk") order.Add("chipmunk");
             foreach (var e in order)
             {
                 string dir = Path.Combine(modPath, e), dll = Path.Combine(dir, "DXPhysicsNative.dll");
                 if (!File.Exists(dll)) { Log.Info("모드 폴더에 " + e + "\\DXPhysicsNative.dll 이 없다"); continue; }
                 if (e == "rapier" && !File.Exists(Path.Combine(dir, "rapier2d_ffi.dll"))) { Log.Info("모드 폴더에 rapier\\rapier2d_ffi.dll 이 없다"); continue; }
+                if (e == "chipmunk-vulkan")
+                {
+                    string why; int vk = PhysicsRedirect.ProbeVulkan(dll, out why);
+                    if (vk <= 0) { Log.Info("Chipmunk2DVulkan: 쓸 수 있는 Vulkan 장치가 없다(" + why + ") — chipmunk 를 쓴다"); continue; }
+                    Log.Info("Chipmunk2DVulkan: " + (vk == 1 ? "Vulkan 장치 " + why : "CPU 모드(" + why + ")"));
+                }
                 if (PhysicsRedirect.Install(h, dll)) return;
             }
             Log.Info("쓸 수 있는 물리 엔진이 모드 폴더에 없다 — 게임 폴더의 물리 DLL 을 쓴다");
@@ -99,14 +106,21 @@ namespace Billions
             try { a(); } catch (Exception e) { Log.Error("perf install " + name, e); }
         }
 
-        // Label of the physics DLL the game calls (DX_SetOption: 200 = backend (2 = Rapier), 201 = Rapier build (1 AVX2, 2 AVX-512),
-        // 202 = release build).
+        // Label of the physics DLL the game calls (DX_SetOption: 200 = backend (2 = Rapier, 3 = Chipmunk2DVulkan), 201 = Rapier
+        // build (1 AVX2, 2 AVX-512), 202 = release build).
         internal static string PhysicsDll()
         {
             try
             {
                 if (PhysicsRedirect.SetOption == null) return "원작(대체본 아님 — 모드 폴더에 chipmunk\\ 또는 rapier\\ 엔진을 넣으면 대량 좀비 물리가 빨라진다)";
-                if (PhysOpt(200, 0) != 2) return "다중 코어 대체본";
+                int backend = PhysOpt(200, 0);
+                if (backend == 3)
+                {
+                    // the world (and with it GPU or CPU mode) starts with the first map; before that the probe's result
+                    string st = PhysicsRedirect.VulkanStatus();
+                    return "Chipmunk2DVulkan 대체본" + (string.IsNullOrEmpty(st) ? "" : " — " + st);
+                }
+                if (backend != 2) return "다중 코어 대체본";
                 string s = "Rapier 대체본";
                 int simd = PhysOpt(201, 0);
                 if (simd == 1) s += " (AVX2)"; else if (simd == 2) s += " (AVX-512)";

@@ -1,11 +1,12 @@
 # Package the built mod for release: dist\TABPerf-v<version>.zip (version from mod\ModInfos.json) and dist\ModPackage.zip
 # (the same files without the TABPerf\ folder, the release asset TABModLoader's auto-update installs).
 #   powershell -ExecutionPolicy Bypass -File scripts\package.ps1 [-OutDir dist]
-# Needs everything built (scripts\build.ps1: chipmunk, rapier with its three builds, mod). The zip holds one folder,
+# Needs everything built (scripts\build.ps1: chipmunk, rapier with its three builds, chipmunk-vulkan, mod). The zip holds one folder,
 # TABPerf\, laid out like scripts\install.ps1 installs it (extract it into <game>\Mods):
 #   TABPerf.dll, ModInfos.json      the engine mod
 #   chipmunk\                       multi-core Chipmunk2D physics DLL
 #   rapier\                         Rapier 2D physics DLL and rapier2d_ffi*.dll
+#   chipmunk-vulkan\                Chipmunk2D physics DLL with the step on the GPU (Vulkan compute)
 #   dxvk\d3d9.dll, LICENSE          DXVK (scripts\lib\dxvk.ps1, downloaded once into native\out\dxvk)
 #   licenses\                       this patch (MIT), Chipmunk2D (MIT), Rapier (Apache-2.0), DXVK (zlib)
 #   README.txt                      how to install and the main settings
@@ -21,6 +22,7 @@ $files = [ordered]@{
   '.'        = @("$repo\mod\out\TABPerf.dll", "$repo\mod\out\ModInfos.json")
   'chipmunk' = @("$out\DXPhysicsNative.dll")
   'rapier'   = @("$out\rapier\DXPhysicsNative.dll", "$out\rapier\rapier2d_ffi.dll", "$out\rapier\rapier2d_ffi_avx2.dll", "$out\rapier\rapier2d_ffi_avx512.dll")
+  'chipmunk-vulkan' = @("$out\chipmunk-vulkan\DXPhysicsNative.dll")
 }
 foreach ($f in $files.Values | ForEach-Object { $_ }) { if (-not (Test-Path $f)) { throw "Missing $f - run scripts\build.ps1 first (all targets)" } }
 $rapierLicense = Join-Path $out 'rapier-sdk\LICENSE'   # copied there by the Rapier build (scripts\build.ps1)
@@ -40,6 +42,8 @@ Copy-Item $dxvk, (Join-Path (Split-Path $dxvk) 'LICENSE') (Join-Path $root 'dxvk
 Copy-Item (Join-Path $repo 'LICENSE.txt') (Join-Path $root 'licenses\TABPerf-MIT.txt')
 Copy-Item (Join-Path $repo 'native\chipmunk\LICENSE.txt') (Join-Path $root 'licenses\Chipmunk2D-MIT.txt')
 Copy-Item $rapierLicense (Join-Path $root 'licenses\Rapier-Apache-2.0.txt')
+# Chipmunk2DVulkan is built from the upstream repository (copied there by the chipmunk-vulkan build)
+Copy-Item (Join-Path $out 'chipmunk-vulkan\Chipmunk2D-LICENSE.txt') (Join-Path $root 'licenses\Chipmunk2D-upstream-MIT.txt')
 Copy-Item (Join-Path (Split-Path $dxvk) 'LICENSE') (Join-Path $root 'licenses\DXVK-zlib.txt')
 # README.txt from scripts\package-readme.txt ({version} filled in); the template stays out of this script so that it
 # remains ASCII (Windows PowerShell reads scripts without a BOM in the system code page)

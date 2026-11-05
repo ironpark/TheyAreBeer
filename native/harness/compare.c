@@ -236,7 +236,8 @@ static int prof_main(const char *dllPath, int n, int steps, int kills)
 	/* The Rapier DLL has no DX_ProfileGet: its step sections and Rapier's stage counters come from DX_SetOption. */
 	int (*opt)(int, int) = (int (*)(int, int))GetProcAddress(A.h, "DX_SetOption");
 	int rapier = (!get || !reset) && opt && opt(200, 0) == 2;
-	if ((!get || !reset) && !rapier) { fprintf(stderr, "DX_PROFILE 판이나 Rapier DLL이 아니다\n"); return 2; }
+	int vulkan = (!get || !reset) && opt && opt(200, 0) == 3;   /* Chipmunk2DVulkan: step sections from DX_SetOption 300-309 */
+	if ((!get || !reset) && !rapier && !vulkan) { fprintf(stderr, "DX_PROFILE 판이나 Rapier · Chipmunk2DVulkan DLL이 아니다\n"); return 2; }
 	Trace t = {0}; g_tr = &t; g_rng = 777u;
 	const float dt = 0.0833333358f, C = 100.0f, H = 30.0f;
 	void *space = A.Space_Create(0.0f, 0.0f, 10);
@@ -261,7 +262,7 @@ static int prof_main(const char *dllPath, int n, int steps, int kills)
 	LARGE_INTEGER f, t0, t1; QueryPerformanceFrequency(&f); double wall = 0; int measured = 0;
 	for (int s = 0; s < steps; s++)
 	{
-		if (s == steps / 3) { if (rapier) opt(399, 0); else reset(); wall = 0; measured = 0; t.n = 0; }
+		if (s == steps / 3) { if (rapier || vulkan) opt(399, 0); else reset(); wall = 0; measured = 0; t.n = 0; }
 		QueryPerformanceCounter(&t0);
 		for (int i = 0; i < n; i++)
 		{
@@ -282,6 +283,18 @@ static int prof_main(const char *dllPath, int n, int steps, int kills)
 		A.Space_Step(space, dt);
 		QueryPerformanceCounter(&t1); wall += (double)(t1.QuadPart - t0.QuadPart) / f.QuadPart; measured++;
 		if (t.n > (1u << 20)) t.n = 0;
+	}
+	if (vulkan)
+	{
+		int k = opt(309, 0); double d = k > 0 ? k : 1;
+		printf("기지 공성(Chipmunk2DVulkan, %s): 좀비 %d, 단계당 죽음 %d, 잰 단계 %d — 단계 전체(시험 도구 포함) %.2f ms\n", opt(201, 0) == 1 ? "GPU" : "CPU 모드", n, kills, k, wall / (measured ? measured : 1) * 1000);
+		if (opt(201, 0) == 1)
+		{
+			printf("  구간(ms/단계): 넣기 %.2f · 앞 절반(충돌) %.2f · 콜백 %.2f · 뒤 절반(풀이) %.2f · 되쓰기+인덱스 %.2f · GPU 시간 %.2f\n", opt(300, 0) / 1000.0 / d, opt(301, 0) / 1000.0 / d, opt(302, 0) / 1000.0 / d, opt(303, 0) / 1000.0 / d, opt(304, 0) / 1000.0 / d, opt(307, 0) / 1000.0 / d);
+			printf("  단계당 몸체 %.0f · 접촉 %.0f · 콜백 쌍 %.0f\n", opt(308, 0) / d, opt(305, 0) / d, opt(306, 0) / d);
+		}
+		else printf("  cpSpaceStep %.2f ms/단계\n", opt(301, 0) / 1000.0 / d);
+		return 0;
 	}
 	if (rapier)
 	{
@@ -389,8 +402,15 @@ int main(int argc, char **argv)
 		char label[64]; sprintf(label, "장면 %d (몸체 %d, 단계 %d)", s, n, steps);
 		ok &= compare(label, &ta, &tb);
 		printf("   시간 원작 %.1f ms · 대체 %.1f ms\n", (t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart, (t2.QuadPart - t1.QuadPart) * 1000.0 / f.QuadPart);
-		/* Rapier backend: step section times (DX_SetOption 300..305). */
-		int k = optB ? optB(305, 0) : 0;
+		/* Rapier backend: step section times (DX_SetOption 300..305); Chipmunk2DVulkan: 300..309 */
+		int backend = optB ? optB(200, 0) : 0;
+		if (backend == 3)
+		{
+			int k3 = optB(309, 0); double d3 = k3 > 0 ? k3 : 1;
+			if (optB(201, 0) == 1) printf("   대체(GPU) 단계 구간(ms/단계): 넣기 %.2f · 앞 절반 %.2f · 콜백 %.2f · 뒤 절반 %.2f · 되쓰기 %.2f · GPU %.2f · 접촉 %.0f\n", optB(300, 0) / 1000.0 / d3, optB(301, 0) / 1000.0 / d3, optB(302, 0) / 1000.0 / d3, optB(303, 0) / 1000.0 / d3, optB(304, 0) / 1000.0 / d3, optB(307, 0) / 1000.0 / d3, optB(305, 0) / d3);
+			else printf("   대체(CPU 모드) cpSpaceStep %.2f ms/단계\n", optB(301, 0) / 1000.0 / d3);
+		}
+		int k = optB && backend == 2 ? optB(305, 0) : 0;
 		if (k > 0) printf("   대체 단계 구간(ms/단계): 넣기 %.2f · r2Step %.2f · 가져오기 %.2f · 접촉 쌍 %.2f · 질의 인덱스 %.2f\n", optB(300, 0) / 1000.0 / k, optB(301, 0) / 1000.0 / k, optB(302, 0) / 1000.0 / k, optB(303, 0) / 1000.0 / k, optB(304, 0) / 1000.0 / k);
 		free(ta.v); free(ta.tag); free(tb.v); free(tb.tag);
 	}

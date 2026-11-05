@@ -1,11 +1,13 @@
 # Build TABPerf: the physics engines and the engine mod.
-#   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 [-Target all|chipmunk|harness|rapier|mod|bench[,...]] [-RefDir <folder>] [-Csc <csc.exe>]
+#   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 [-Target all|chipmunk|harness|rapier|chipmunk-vulkan|mod|bench[,...]] [-RefDir <folder>] [-Csc <csc.exe>]
 #
 # Targets (built in this order; default all):
 #   chipmunk  native\out\DXPhysicsNative.dll          multi-core Chipmunk 7.0.0 physics (MSVC x64)
 #   harness   native\out\compare.exe                  runs the game's DLL and a replacement side by side and compares them
 #   rapier    native\out\rapier\DXPhysicsNative.dll   Rapier 2D physics, with rapier2d_ffi.dll, rapier2d_ffi_avx2.dll and rapier2d_ffi_avx512.dll
 #             (needs CMake 3.25+, git and rustup; "all" skips it with a warning when they are missing)
+#   chipmunk-vulkan  native\out\chipmunk-vulkan\DXPhysicsNative.dll   Chipmunk2D (upstream, fetched) with the step on the
+#             GPU (Vulkan compute); needs git ("all" skips it with a warning without git)
 #   mod       mod\out\TABPerf.dll, ModInfos.json      the engine mod (Roslyn C#); needs the TABModLoader references in
 #             -RefDir (default <repo>\refs, filled by scripts\setup.ps1)
 #   bench     bench\out\TABBench.dll, ModInfos.json   the benchmark mod that scripts\bench.ps1 installs for its runs (same references)
@@ -15,9 +17,10 @@ param([string[]]$Target = 'all', [string]$RefDir = '', [string]$Csc = '')
 $ErrorActionPreference = 'Stop'
 # -File passes "-Target a,b" as one string: split it here
 $Target = @($Target | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
-$known = 'all', 'chipmunk', 'harness', 'rapier', 'mod', 'bench'
+$known = 'all', 'chipmunk', 'harness', 'rapier', 'chipmunk-vulkan', 'mod', 'bench'
 foreach ($t in $Target) { if ($known -notcontains $t) { throw "Unknown -Target $t (use $($known -join ', '))" } }
 . (Join-Path $PSScriptRoot 'lib\toolchain.ps1')
+. (Join-Path $PSScriptRoot 'lib\glslang.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 $native = Join-Path $repo 'native'
 $all = $Target -contains 'all'
@@ -84,16 +87,28 @@ $rapierVariants = @(
 
 function Test-RapierTools { -not ('git', 'cmake', 'rustup' | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }) }
 
-# The Rapier working tree is HEAD plus exactly these patches. A stamp file in .git holds their hashes; when the set or a
-# patch changes, the tree is reset to HEAD and all of them are applied again.
-function Set-RapierPatches([string]$dir, $patches) {
+# A fetched source tree (Rapier, Chipmunk2D) is HEAD plus exactly these patches. A stamp file in .git holds their hashes;
+# when the set or a patch changes, the tree is reset to HEAD and all of them are applied again.
+function Set-SourcePatches([string]$dir, $patches, [string]$what) {
   $want = ($patches | ForEach-Object { "$($_.Name) $((Get-FileHash $_.FullName -Algorithm SHA256).Hash)" }) -join "`n"
   $stamp = Join-Path $dir '.git\tabperf-patches'
   if ((Test-Path $stamp) -and (Get-Content $stamp -Raw) -eq $want) { return }
-  & git -C $dir checkout -q --force HEAD -- .; if ($LASTEXITCODE -ne 0) { throw 'reset Rapier source failed' }
-  & git -C $dir clean -q -fd; if ($LASTEXITCODE -ne 0) { throw 'clean Rapier source failed' }
+  & git -C $dir checkout -q --force HEAD -- .; if ($LASTEXITCODE -ne 0) { throw "reset $what source failed" }
+  & git -C $dir clean -q -fd; if ($LASTEXITCODE -ne 0) { throw "clean $what source failed" }
   foreach ($patch in $patches) { & git -C $dir apply $patch.FullName; if ($LASTEXITCODE -ne 0) { throw "git apply $($patch.Name) failed" } }
   [IO.File]::WriteAllText($stamp, $want)
+}
+
+# A git repository checked out at a pinned commit (shallow; LF line endings as in the repository, the patches are LF).
+function Get-PinnedSource([string]$dir, [string]$url, [string]$rev) {
+  function Check([string]$what) { if ($LASTEXITCODE -ne 0) { throw "$what failed ($url)" } }
+  if (-not (Test-Path (Join-Path $dir '.git'))) { & git init -q $dir; Check 'git init'; & git -C $dir remote add origin $url; Check 'git remote' }
+  & git -C $dir config core.autocrlf false; Check 'git config'
+  if ((& git -C $dir rev-parse -q --verify HEAD 2>$null) -ne $rev) {
+    & git -C $dir fetch -q --depth 1 origin $rev; Check 'git fetch'
+    & git -C $dir -c advice.detachedHead=false checkout -q --force FETCH_HEAD; Check 'git checkout'
+    Remove-Item (Join-Path $dir '.git\tabperf-patches') -ErrorAction SilentlyContinue
+  }
 }
 
 function Build-Rapier {
@@ -122,13 +137,8 @@ function Build-Rapier {
 
   if ($todo.Count) {
     # Rapier source at the pinned commit, with LF line endings as in the repository (the patches are LF)
-    if (-not (Test-Path (Join-Path $srcDir '.git'))) { & git init -q $srcDir; Check 'git init'; & git -C $srcDir remote add origin https://github.com/dimforge/rapier.git; Check 'git remote' }
-    & git -C $srcDir config core.autocrlf false; Check 'git config'
-    if ((& git -C $srcDir rev-parse -q --verify HEAD 2>$null) -ne $rapierRev) {
-      & git -C $srcDir fetch -q --depth 1 origin $rapierRev; Check 'git fetch'
-      & git -C $srcDir -c advice.detachedHead=false checkout -q --force FETCH_HEAD; Check 'git checkout'
-    }
-    Set-RapierPatches $srcDir $patches
+    Get-PinnedSource $srcDir 'https://github.com/dimforge/rapier.git' $rapierRev
+    Set-SourcePatches $srcDir $patches 'Rapier'
     if (-not ((& rustup toolchain list) -match [regex]::Escape($rapierToolchain))) { & rustup toolchain install $rapierToolchain --profile minimal; Check "rustup install $rapierToolchain" }
     # Cargo.lock is not in the Rapier repository (ignored), so a fresh checkout has none: resolve and download the crates
     # once here, before the side-by-side builds would each write Cargo.lock into the shared source folder
@@ -180,6 +190,68 @@ function Build-Rapier {
   Write-Host ("OK: $dll  (dx_text_pad at RVA 0x{0:X})" -f (Assert-TextPad $dll $map))
   $opts = ($rapierOptions.Keys | ForEach-Object { ($_ -replace ':.*$', '') + '=' + $rapierOptions[$_] }) -join ', '
   foreach ($b in $built) { Write-Host "OK: $($b.dll)  (official CMake build: $opts, fat LTO; $($b.what); $($b.tests))" }
+}
+
+# ---------- chipmunk-vulkan: DXPhysicsNative.dll (Chipmunk2D + Vulkan compute) ----------
+# Chipmunk2D is fetched from its repository at $chipmunkRev into native\out\chipmunk2d-src (upstream source, with the
+# patches in native\chipmunk-vulkan applied: chipmunk-filter-either.patch gives the CPU mode the game's filter rule).
+# The step runs as Vulkan compute kernels (native\chipmunk-vulkan\cpvk.comp), compiled to SPIR-V by glslang
+# (scripts\lib\glslang.ps1, build time only) and embedded in the DLL; the Vulkan headers come from Vulkan-Headers at
+# $vulkanHeadersRev. vulkan-1.dll (the Vulkan loader, part of every Vulkan driver) is loaded at run time.
+$chipmunkRev = '5b45034a8761518800e03dd79f33c3aad0bf7fee'        # Chipmunk2D master, 2026-01-08 (7.0.3 and later fixes)
+$chipmunkUrl = 'https://codeberg.org/slembcke/Chipmunk2D.git'
+$vulkanHeadersRev = 'b5c8f996196ba4aa6d8f97e52b5d3b6e70f7e4e2'   # Vulkan-Headers vulkan-sdk-1.4.341.0
+$vulkanHeadersUrl = 'https://github.com/KhronosGroup/Vulkan-Headers.git'
+# the kernels of cpvk.comp (K_<name>); cpvk_spv.h gets them as CVK_KERNELS(X), cpvk_gpu.c's enum and SPIR-V table
+$cvkKernels = 'SHAPE_SCATTER', 'BODY_PATCH', 'INTEGRATE_POS', 'SHAPE_UPDATE', 'GRID_COUNT', 'GRID_SCATTER', 'GRID_SORT', 'SCAN',
+  'NARROW_COUNT', 'NARROW_WRITE', 'DISABLE', 'COUNT', 'PRESTEP', 'INTEGRATE_VEL', 'WARM', 'SOLVE', 'APPLY', 'OUTPUT', 'WARM_SAVE',
+  'COLOR', 'COLOR_SCATTER', 'CSOLVE'
+
+function Build-ChipmunkVulkan {
+  $here = Join-Path $native 'chipmunk-vulkan'
+  $out = Join-Path $native 'out\chipmunk-vulkan'; $obj = Join-Path $out 'obj'; New-Item -ItemType Directory -Force $out, $obj | Out-Null
+  $dll = Join-Path $out 'DXPhysicsNative.dll'; $map = Join-Path $out 'DXPhysicsNative.map'
+  Remove-Item $dll, $map -ErrorAction SilentlyContinue
+  $cpSrc = Join-Path $native 'out\chipmunk2d-src'; $vkSrc = Join-Path $native 'out\vulkan-headers'
+  Get-PinnedSource $cpSrc $chipmunkUrl $chipmunkRev
+  Set-SourcePatches $cpSrc @(Get-ChildItem $here -Filter *.patch | Sort-Object Name) 'Chipmunk2D'
+  Get-PinnedSource $vkSrc $vulkanHeadersUrl $vulkanHeadersRev
+  Copy-Item (Join-Path $cpSrc 'LICENSE.txt') (Join-Path $out 'Chipmunk2D-LICENSE.txt') -Force
+
+  # SPIR-V: one array per kernel (cvk_<name>) and the list of kernels in obj\cpvk_spv.h
+  $glslang = Get-Glslang (Join-Path $native 'out\glslang')
+  $spvLog = Join-Path $out 'shaders.log'; Remove-Item $spvLog -ErrorAction SilentlyContinue
+  $header = New-Object System.Text.StringBuilder
+  [void]$header.Append("// generated by scripts\build.ps1 from native\chipmunk-vulkan\cpvk.comp (glslang $GlslangVersion)`r`n#pragma once`r`n#include <stdint.h>`r`n")
+  foreach ($k in $cvkKernels) {
+    $h = Join-Path $obj "cvk_$k.h"
+    $ErrorActionPreference = 'Continue'
+    $msg = & $glslang -V --target-env vulkan1.1 -S comp "-DK_$k" --vn "cvk_$k" -o $h (Join-Path $here 'cpvk.comp') 2>&1
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    Add-Content $spvLog "---- K_$k (exit $code)`r`n$($msg -join "`r`n")"
+    if ($code -ne 0) { $msg | ForEach-Object { Write-Host $_ }; throw "glslang K_$k failed (see $spvLog)" }
+    # glslang's header has its own #pragma once / include lines: keep the array only
+    $text = (Get-Content $h -Raw) -replace '(?m)^\s*#pragma once\s*$', '' -replace '(?m)^\s*#include.*$', ''
+    [void]$header.Append($text + "`r`n")
+  }
+  [void]$header.Append('#define CVK_KERNELS(X) ' + (($cvkKernels | ForEach-Object { "X($_)" }) -join ' ') + "`r`n")
+  [IO.File]::WriteAllText((Join-Path $obj 'cpvk_spv.h'), $header.ToString())
+
+  # Upstream Chipmunk2D sources (cpHastySpace.c needs pthreads: not used), the wrapper, the Vulkan backend, the shared
+  # thread pool and crash diagnostics (dx_text_pad: see dxdiag.c).
+  $src = @('"chipmunk-vulkan\DXPhysicsVulkan.c"', '"chipmunk-vulkan\cpvk_gpu.c"', '"dxphysics\dxdiag.c"', '"dxphysics\dxpool.c"')
+  $src += Get-ChildItem (Join-Path $cpSrc 'src') -Filter *.c | Where-Object { $_.Name -ne 'cpHastySpace.c' } | ForEach-Object { '"' + $_.FullName + '"' }
+  $flags = '/nologo /utf-8 /O2 /MT /LD /W3 /DNDEBUG /DWIN32 /DCP_USE_DOUBLES=0 /D_CRT_SECURE_NO_WARNINGS /wd4244 /wd4305 /wd4018 /wd4996 /d1trimfile:' + $native + '\'
+  $inc = "/I`"$cpSrc\include`" /I`"$vkSrc\include`" /Idxphysics /I`"$obj`""
+  # dxpad.asm: the second code pad (dx_text_pad2, see DXPhysicsVulkan.c), assembled by ml64
+  $padObj = Join-Path $obj 'dxpad.obj'
+  Invoke-Cmd "cd /d `"$native`" && `"$vcvars`" >nul && ml64 /nologo /c /Fo`"$padObj`" chipmunk-vulkan\dxpad.asm" (Join-Path $out 'build-pad.log') 'dxpad.asm (ml64)'
+  Invoke-Cmd "cd /d `"$native`" && `"$vcvars`" >nul && cl $flags $inc /Fo`"$obj\\`" /Fe`"$dll`" $($src -join ' ') `"$padObj`" /link /NOLOGO /MAP:`"$map`"" (Join-Path $out 'build.log') 'Chipmunk2DVulkan DXPhysicsNative.dll build'
+  $pad = Assert-TextPad $dll $map
+  # the game also writes at base + 0x3AE30 (see dx_text_pad2 in DXPhysicsVulkan.c)
+  $pad2 = Assert-MapCovers $dll $map 'dx_text_pad2' 0x3A000 0x3AE00 0x3AE80
+  Write-Host ("OK: $dll  (dx_text_pad at RVA 0x{0:X}, dx_text_pad2 at 0x{1:X}; Chipmunk2D {2}, glslang {3})" -f $pad, $pad2, $chipmunkRev.Substring(0, 10), $GlslangVersion)
 }
 
 # ---------- mod: TABPerf.dll, bench: TABBench.dll ----------
@@ -236,7 +308,7 @@ function Build-Mod([string]$folder = 'mod', [string]$name = 'TABPerf', [string]$
 }
 
 # ---------- run ----------
-$needMsvc = (Wanted 'chipmunk') -or (Wanted 'harness') -or (Wanted 'rapier')
+$needMsvc = (Wanted 'chipmunk') -or (Wanted 'harness') -or (Wanted 'rapier') -or (Wanted 'chipmunk-vulkan')
 if ($needMsvc) { Assert-NoSpaces $native; $vcvars = Get-VcVars }
 if (Wanted 'chipmunk') { Build-Chipmunk }
 if (Wanted 'harness') {
@@ -248,6 +320,11 @@ if (Wanted 'rapier') {
   elseif ($all) { Write-Warning 'Rapier skipped: git, cmake and rustup are needed (scripts\build.ps1 -Target rapier once they are installed).' }
   else { throw 'Rapier needs git, cmake and rustup.' }
 }
+if (Wanted 'chipmunk-vulkan') {
+  if (Get-Command git -ErrorAction SilentlyContinue) { Build-ChipmunkVulkan }
+  elseif ($all) { Write-Warning 'Chipmunk2DVulkan skipped: git is needed (scripts\build.ps1 -Target chipmunk-vulkan once it is installed).' }
+  else { throw 'Chipmunk2DVulkan needs git.' }
+}
 if (Wanted 'mod') { Build-Mod }
 if (Wanted 'bench') { Build-Mod 'bench' 'TABBench' 'TABBENCH' }
-Write-Host 'Next: scripts\install.ps1 [-Engine chipmunk|rapier]'
+Write-Host 'Next: scripts\install.ps1 [-Engine chipmunk|rapier|chipmunk-vulkan]'

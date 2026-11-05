@@ -36,36 +36,47 @@ namespace Billions
         public static void Init(Harmony h)
         {
             _h = h;
-            // TABPERF_AUTOBENCH=1 (testing): start the benchmark as soon as the main menu is up, as the button would
-            if (!Settings.Switch("TABPERF_AUTOBENCH", false)) return;
-            var show = AccessTools.Method(typeof(ZXSystem_StartScreen), "ShowScene");
-            if (show != null) h.Patch(show, null, new HarmonyMethod(typeof(InGameBench), nameof(AfterStartScreen)));
+            // TABPERF_AUTOBENCH=1 (testing): start the benchmark once the main menu has settled, as the button would
+            if (Settings.Switch("TABPERF_AUTOBENCH", false))
+                OnMenu(() => { Log.Info("벤치마크: TABPERF_AUTOBENCH — 자동 시작"); Start(); }, 2000);
         }
 
-        static bool _autoDone;
-        static void AfterStartScreen()
-        {
-            if (_autoDone) return;
-            _autoDone = true;
-            new Thread(() =>
-            {
-                try
-                {
-                    for (int i = 0, calm = 0; i < 600 && calm < 20; i++) { Thread.Sleep(100); calm = CanStart ? calm + 1 : 0; }
-                    Log.Info("벤치마크: TABPERF_AUTOBENCH — 자동 시작");
-                    Start();
-                }
-                catch (Exception e) { Log.Error("benchmark auto start", e); }
-            }) { IsBackground = true, Name = "TABPerf benchmark auto" }.Start();
-        }
+        public static bool CanStart { get { return !Active && !_starting && OnStartScreen; } }
 
-        public static bool CanStart
+        static bool OnStartScreen
         {
             get
             {
-                try { var g = ZXGame.get_Current(); return !Active && !_starting && g != null && g.CurrentGameSystem is ZXSystem_StartScreen && !g.ChangingScene && !g.IsLoading; }
+                try { var g = ZXGame.get_Current(); return g != null && g.CurrentGameSystem is ZXSystem_StartScreen && !g.ChangingScene && !g.IsLoading; }
                 catch { return false; }
             }
+        }
+
+        // Work for the main menu once it has been up, without a scene change or loading, for `calmMs` (the result window,
+        // the automatic start): checked by a DXGame.StartFrame postfix on the render thread, patched the first time.
+        static Action _onMenu; static int _calmMs; static long _calmSince;
+        static bool _menuHooked;
+        static void OnMenu(Action a, int calmMs)
+        {
+            if (!_menuHooked)
+            {
+                var sf = AccessTools.Method(typeof(DXGame), "StartFrame", Type.EmptyTypes);
+                if (sf == null) { Log.Info("HOOK MISSING: DXGame.StartFrame — 벤치마크 메뉴 작업 못 함"); return; }
+                _h.Patch(sf, null, new HarmonyMethod(typeof(InGameBench), nameof(MenuFrame)));
+                _menuHooked = true;
+            }
+            _calmMs = calmMs; _calmSince = 0; _onMenu = a;
+        }
+
+        static void MenuFrame()
+        {
+            var a = _onMenu; if (a == null) return;
+            if (!OnStartScreen) { _calmSince = 0; return; }
+            long now = Stopwatch.GetTimestamp();
+            if (_calmSince == 0) { _calmSince = now; return; }
+            if ((now - _calmSince) * 1000 < _calmMs * Stopwatch.Frequency) return;
+            _onMenu = null;
+            try { a(); } catch (Exception e) { Log.Error("benchmark menu", e); }
         }
 
         // from the Optimization tab's button (main menu)
@@ -319,16 +330,8 @@ namespace Billions
             {
                 var game = ZXGame.get_Current();
                 game.ShowStartScreen(delegate { try { game.DeleteSaveGames(SaveName); } catch { } }, true);
-                new Thread(() =>
-                {
-                    try
-                    {
-                        int calm = 0;
-                        for (int i = 0; i < 600 && calm < 10; i++) { Thread.Sleep(100); var z = ZXGame.get_Current(); calm = z.ChangingScene || z.IsLoading || !(z.CurrentGameSystem is ZXSystem_StartScreen) ? 0 : calm + 1; }
-                        DXGame.Current.InvokeOnStartFrame(() => ZXMessageBox.ShowOK(Lang.T("벤치마크 결과", "Benchmark result"), summary + (csv != null ? "\n\n" + csv : ""), null));
-                    }
-                    catch (Exception e) { Log.Error("benchmark result window", e); }
-                }) { IsBackground = true, Name = "TABPerf benchmark result" }.Start();
+                // the result window on the main menu, the next frame after it has settled
+                OnMenu(() => DXGame.Current.InvokeOnStartFrame(() => ZXMessageBox.ShowOK(Lang.T("벤치마크 결과", "Benchmark result"), summary + (csv != null ? "\n\n" + csv : ""), null)), 1000);
             }
             catch (Exception e) { Log.Error("benchmark stop", e); }
         }

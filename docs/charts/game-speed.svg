@@ -1,102 +1,123 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="게임 진행 속도">
-<style>svg{font-family:system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif}.bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.tm{fill:#898781}.grid{stroke:#e1e0d9}.axis{stroke:#c3c2b7}.ring{stroke:#fcfcfb}.ref{stroke:#898781}.s-original{stroke:#2a78d6}.f-original{fill:#2a78d6}.s-first{stroke:#eda100}.f-first{fill:#eda100}.s-chipmunk{stroke:#eb6834}.f-chipmunk{fill:#eb6834}.s-rapier{stroke:#1baf7a}.f-rapier{fill:#1baf7a}@media (prefers-color-scheme: dark){.bg{fill:#1a1a19}.t1{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.axis{stroke:#383835}.ring{stroke:#1a1a19}.s-original{stroke:#3987e5}.f-original{fill:#3987e5}.s-first{stroke:#c98500}.f-first{fill:#c98500}.s-chipmunk{stroke:#d95926}.f-chipmunk{fill:#d95926}.s-rapier{stroke:#199e70}.f-rapier{fill:#199e70}}</style>
+<style>svg{font-family:system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif}.bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.tm{fill:#898781}.grid{stroke:#e1e0d9}.axis{stroke:#c3c2b7}.ring{stroke:#fcfcfb}.ref{stroke:#898781}.s-original{stroke:#2a78d6}.f-original{fill:#2a78d6}.s-first{stroke:#eda100}.f-first{fill:#eda100}.s-chipmunk{stroke:#eb6834}.f-chipmunk{fill:#eb6834}.s-rapier{stroke:#1baf7a}.f-rapier{fill:#1baf7a}.s-chipmunk-vulkan{stroke:#e87ba4}.f-chipmunk-vulkan{fill:#e87ba4}@media (prefers-color-scheme: dark){.bg{fill:#1a1a19}.t1{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.axis{stroke:#383835}.ring{stroke:#1a1a19}.s-original{stroke:#3987e5}.f-original{fill:#3987e5}.s-first{stroke:#c98500}.f-first{fill:#c98500}.s-chipmunk{stroke:#d95926}.f-chipmunk{fill:#d95926}.s-rapier{stroke:#199e70}.f-rapier{fill:#199e70}.s-chipmunk-vulkan{stroke:#d55181}.f-chipmunk-vulkan{fill:#d55181}}</style>
 <rect class="bg" width="1000" height="360" rx="8"/>
 <text class="t1" x="64" y="26" font-size="16" font-weight="600">게임 진행 속도</text>
 <text class="t2" x="64" y="46" font-size="12">실제 1초에 게임 시계가 가는 비율 (1.0 = 제 속도). 좀비 5천 마리 구간 평균</text>
-<line class="grid" x1="64" x2="850" y1="308.0" y2="308.0" stroke-width="1"/>
+<line class="grid" x1="64" x2="820" y1="308.0" y2="308.0" stroke-width="1"/>
 <text class="tm" x="56" y="312.0" font-size="11" text-anchor="end">0</text>
-<line class="grid" x1="64" x2="850" y1="257.1" y2="257.1" stroke-width="1"/>
+<line class="grid" x1="64" x2="820" y1="257.1" y2="257.1" stroke-width="1"/>
 <text class="tm" x="56" y="261.1" font-size="11" text-anchor="end">0.25</text>
-<line class="grid" x1="64" x2="850" y1="206.2" y2="206.2" stroke-width="1"/>
+<line class="grid" x1="64" x2="820" y1="206.2" y2="206.2" stroke-width="1"/>
 <text class="tm" x="56" y="210.2" font-size="11" text-anchor="end">0.5</text>
-<line class="grid" x1="64" x2="850" y1="155.3" y2="155.3" stroke-width="1"/>
+<line class="grid" x1="64" x2="820" y1="155.3" y2="155.3" stroke-width="1"/>
 <text class="tm" x="56" y="159.3" font-size="11" text-anchor="end">0.75</text>
-<line class="grid" x1="64" x2="850" y1="104.4" y2="104.4" stroke-width="1"/>
+<line class="grid" x1="64" x2="820" y1="104.4" y2="104.4" stroke-width="1"/>
 <text class="tm" x="56" y="108.4" font-size="11" text-anchor="end">1</text>
-<line class="axis" x1="64" x2="850" y1="308" y2="308" stroke-width="1"/>
+<line class="axis" x1="64" x2="820" y1="308" y2="308" stroke-width="1"/>
 <text class="tm" x="64.0" y="326" font-size="11" text-anchor="middle">0만</text>
-<text class="tm" x="213.7" y="326" font-size="11" text-anchor="middle">2만</text>
-<text class="tm" x="363.4" y="326" font-size="11" text-anchor="middle">4만</text>
-<text class="tm" x="513.1" y="326" font-size="11" text-anchor="middle">6만</text>
-<text class="tm" x="662.9" y="326" font-size="11" text-anchor="middle">8만</text>
-<text class="tm" x="812.6" y="326" font-size="11" text-anchor="middle">10만</text>
-<text class="tm" x="457.0" y="350" font-size="11" text-anchor="middle">좀비 수</text>
+<text class="tm" x="208.0" y="326" font-size="11" text-anchor="middle">2만</text>
+<text class="tm" x="352.0" y="326" font-size="11" text-anchor="middle">4만</text>
+<text class="tm" x="496.0" y="326" font-size="11" text-anchor="middle">6만</text>
+<text class="tm" x="640.0" y="326" font-size="11" text-anchor="middle">8만</text>
+<text class="tm" x="784.0" y="326" font-size="11" text-anchor="middle">10만</text>
+<text class="tm" x="442.0" y="350" font-size="11" text-anchor="middle">좀비 수</text>
 <text class="tm" x="12" y="70" font-size="11" text-anchor="start">게임 시간 배율</text>
-<line class="ref" x1="64" x2="850" y1="104.4" y2="104.4" stroke-width="1" stroke-dasharray="4 4"/>
+<line class="ref" x1="64" x2="820" y1="104.4" y2="104.4" stroke-width="1" stroke-dasharray="4 4"/>
 <text class="tm" x="70" y="99.4" font-size="11" text-anchor="start">제 속도</text>
-<path class="s-original" d="M195.0,174.1 L232.4,182.5 L269.9,197.4 L307.3,218.6 L344.7,235.9 L382.1,248.8 L419.6,258.0" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="195.0" cy="174.1" r="10" fill="transparent"><title>원작 · 좀비 15~20천 (4초): 0.66배</title></circle>
-<circle cx="232.4" cy="182.5" r="10" fill="transparent"><title>원작 · 좀비 20~25천 (6초): 0.62배</title></circle>
-<circle cx="269.9" cy="197.4" r="10" fill="transparent"><title>원작 · 좀비 25~30천 (8초): 0.54배</title></circle>
-<circle cx="307.3" cy="218.6" r="10" fill="transparent"><title>원작 · 좀비 30~35천 (13초): 0.44배</title></circle>
-<circle cx="344.7" cy="235.9" r="10" fill="transparent"><title>원작 · 좀비 35~40천 (15초): 0.35배</title></circle>
-<circle cx="382.1" cy="248.8" r="10" fill="transparent"><title>원작 · 좀비 40~45천 (20초): 0.29배</title></circle>
-<circle cx="419.6" cy="258.0" r="10" fill="transparent"><title>원작 · 좀비 45~50천 (25초): 0.25배</title></circle>
-<path class="s-first" d="M195.0,158.8 L232.4,154.5 L269.9,159.5 L307.3,163.6 L344.7,171.6 L382.1,178.1 L419.6,184.0 L457.0,190.3 L494.4,197.4 L531.9,204.0 L569.3,208.9 L606.7,213.5 L644.1,217.6 L681.6,222.8 L719.0,225.2 L756.4,228.2 L793.9,233.0" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="195.0" cy="158.8" r="10" fill="transparent"><title>최초 배포본 · 좀비 15~20천 (4초): 0.73배</title></circle>
-<circle cx="232.4" cy="154.5" r="10" fill="transparent"><title>최초 배포본 · 좀비 20~25천 (5초): 0.75배</title></circle>
-<circle cx="269.9" cy="159.5" r="10" fill="transparent"><title>최초 배포본 · 좀비 25~30천 (6초): 0.73배</title></circle>
-<circle cx="307.3" cy="163.6" r="10" fill="transparent"><title>최초 배포본 · 좀비 30~35천 (8초): 0.71배</title></circle>
-<circle cx="344.7" cy="171.6" r="10" fill="transparent"><title>최초 배포본 · 좀비 35~40천 (7초): 0.67배</title></circle>
-<circle cx="382.1" cy="178.1" r="10" fill="transparent"><title>최초 배포본 · 좀비 40~45천 (10초): 0.64배</title></circle>
-<circle cx="419.6" cy="184.0" r="10" fill="transparent"><title>최초 배포본 · 좀비 45~50천 (10초): 0.61배</title></circle>
-<circle cx="457.0" cy="190.3" r="10" fill="transparent"><title>최초 배포본 · 좀비 50~55천 (10초): 0.58배</title></circle>
-<circle cx="494.4" cy="197.4" r="10" fill="transparent"><title>최초 배포본 · 좀비 55~60천 (12초): 0.54배</title></circle>
-<circle cx="531.9" cy="204.0" r="10" fill="transparent"><title>최초 배포본 · 좀비 60~65천 (12초): 0.51배</title></circle>
-<circle cx="569.3" cy="208.9" r="10" fill="transparent"><title>최초 배포본 · 좀비 65~70천 (14초): 0.49배</title></circle>
-<circle cx="606.7" cy="213.5" r="10" fill="transparent"><title>최초 배포본 · 좀비 70~75천 (14초): 0.46배</title></circle>
-<circle cx="644.1" cy="217.6" r="10" fill="transparent"><title>최초 배포본 · 좀비 75~80천 (16초): 0.44배</title></circle>
-<circle cx="681.6" cy="222.8" r="10" fill="transparent"><title>최초 배포본 · 좀비 80~85천 (17초): 0.42배</title></circle>
-<circle cx="719.0" cy="225.2" r="10" fill="transparent"><title>최초 배포본 · 좀비 85~90천 (20초): 0.41배</title></circle>
-<circle cx="756.4" cy="228.2" r="10" fill="transparent"><title>최초 배포본 · 좀비 90~95천 (20초): 0.39배</title></circle>
-<circle cx="793.9" cy="233.0" r="10" fill="transparent"><title>최초 배포본 · 좀비 95~100천 (21초): 0.37배</title></circle>
-<path class="s-chipmunk" d="M232.4,104.4 L269.9,104.4 L307.3,104.3 L344.7,104.4 L382.1,106.3 L419.6,104.8 L457.0,104.6 L494.4,104.9 L531.9,107.1 L569.3,111.6 L606.7,117.6 L644.1,128.9 L681.6,145.5 L719.0,155.3 L756.4,167.8 L793.9,178.8" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="232.4" cy="104.4" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 20~25천 (4초): 1.00배</title></circle>
-<circle cx="269.9" cy="104.4" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 25~30천 (5초): 1.00배</title></circle>
-<circle cx="307.3" cy="104.3" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 30~35천 (5초): 1.00배</title></circle>
-<circle cx="344.7" cy="104.4" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 35~40천 (6초): 1.00배</title></circle>
-<circle cx="382.1" cy="106.3" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 40~45천 (5초): 0.99배</title></circle>
-<circle cx="419.6" cy="104.8" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 45~50천 (7초): 1.00배</title></circle>
-<circle cx="457.0" cy="104.6" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 50~55천 (6초): 1.00배</title></circle>
-<circle cx="494.4" cy="104.9" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 55~60천 (6초): 1.00배</title></circle>
-<circle cx="531.9" cy="107.1" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 60~65천 (6초): 0.99배</title></circle>
-<circle cx="569.3" cy="111.6" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 65~70천 (7초): 0.96배</title></circle>
-<circle cx="606.7" cy="117.6" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 70~75천 (7초): 0.93배</title></circle>
-<circle cx="644.1" cy="128.9" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 75~80천 (8초): 0.88배</title></circle>
-<circle cx="681.6" cy="145.5" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 80~85천 (9초): 0.80배</title></circle>
-<circle cx="719.0" cy="155.3" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 85~90천 (10초): 0.75배</title></circle>
-<circle cx="756.4" cy="167.8" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 90~95천 (12초): 0.69배</title></circle>
-<circle cx="793.9" cy="178.8" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 95~100천 (13초): 0.63배</title></circle>
-<path class="s-rapier" d="M232.4,104.5 L269.9,104.6 L307.3,104.4 L344.7,104.4 L382.1,104.6 L419.6,104.6 L457.0,105.9 L494.4,105.3 L531.9,106.3 L569.3,107.6 L606.7,112.9 L644.1,120.2 L681.6,130.6 L719.0,137.9 L756.4,147.1 L793.9,156.3" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="232.4" cy="104.5" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 20~25천 (4초): 1.00배</title></circle>
-<circle cx="269.9" cy="104.6" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 25~30천 (5초): 1.00배</title></circle>
-<circle cx="307.3" cy="104.4" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 30~35천 (5초): 1.00배</title></circle>
-<circle cx="344.7" cy="104.4" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 35~40천 (6초): 1.00배</title></circle>
-<circle cx="382.1" cy="104.6" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 40~45천 (5초): 1.00배</title></circle>
-<circle cx="419.6" cy="104.6" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 45~50천 (6초): 1.00배</title></circle>
-<circle cx="457.0" cy="105.9" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 50~55천 (7초): 0.99배</title></circle>
-<circle cx="494.4" cy="105.3" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 55~60천 (6초): 1.00배</title></circle>
-<circle cx="531.9" cy="106.3" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 60~65천 (6초): 0.99배</title></circle>
-<circle cx="569.3" cy="107.6" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 65~70천 (7초): 0.98배</title></circle>
-<circle cx="606.7" cy="112.9" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 70~75천 (7초): 0.96배</title></circle>
-<circle cx="644.1" cy="120.2" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 75~80천 (8초): 0.92배</title></circle>
-<circle cx="681.6" cy="130.6" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 80~85천 (8초): 0.87배</title></circle>
-<circle cx="719.0" cy="137.9" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 85~90천 (10초): 0.84배</title></circle>
-<circle cx="756.4" cy="147.1" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 90~95천 (10초): 0.79배</title></circle>
-<circle cx="793.9" cy="156.3" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 95~100천 (11초): 0.75배</title></circle>
-<circle class="f-rapier ring" cx="793.9" cy="156.3" r="4.5" stroke-width="2"/>
-<line class="s-rapier" x1="799.9" y1="156.3" x2="860" y2="156.3" stroke-width="1"/>
-<text class="t1" x="864" y="154.3" font-size="12" font-weight="600">Rapier (DXVK)</text>
-<text class="t2" x="864" y="169.3" font-size="11">0.75배</text>
-<circle class="f-chipmunk ring" cx="793.9" cy="178.8" r="4.5" stroke-width="2"/>
-<line class="s-chipmunk" x1="799.9" y1="178.8" x2="860" y2="186.3" stroke-width="1"/>
-<text class="t1" x="864" y="184.3" font-size="12" font-weight="600">Chipmunk (DXVK)</text>
-<text class="t2" x="864" y="199.3" font-size="11">0.63배</text>
-<circle class="f-first ring" cx="793.9" cy="233.0" r="4.5" stroke-width="2"/>
-<line class="s-first" x1="799.9" y1="233.0" x2="860" y2="233.0" stroke-width="1"/>
-<text class="t1" x="864" y="231.0" font-size="12" font-weight="600">최초 배포본</text>
-<text class="t2" x="864" y="246.0" font-size="11">0.37배</text>
-<circle class="f-original ring" cx="419.6" cy="258.0" r="4.5" stroke-width="2"/>
-<text class="t1" x="429.57142857142856" y="256.0" font-size="12" font-weight="600">원작</text>
-<text class="t2" x="429.57142857142856" y="271.0" font-size="11">0.25배</text>
+<path class="s-original" d="M190.0,168.7 L226.0,180.8 L262.0,200.0 L298.0,219.2 L334.0,236.6 L370.0,249.5 L406.0,258.6" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="190.0" cy="168.7" r="10" fill="transparent"><title>원작 · 좀비 15~20천 (4초): 0.68배</title></circle>
+<circle cx="226.0" cy="180.8" r="10" fill="transparent"><title>원작 · 좀비 20~25천 (6초): 0.62배</title></circle>
+<circle cx="262.0" cy="200.0" r="10" fill="transparent"><title>원작 · 좀비 25~30천 (8초): 0.53배</title></circle>
+<circle cx="298.0" cy="219.2" r="10" fill="transparent"><title>원작 · 좀비 30~35천 (13초): 0.44배</title></circle>
+<circle cx="334.0" cy="236.6" r="10" fill="transparent"><title>원작 · 좀비 35~40천 (16초): 0.35배</title></circle>
+<circle cx="370.0" cy="249.5" r="10" fill="transparent"><title>원작 · 좀비 40~45천 (20초): 0.29배</title></circle>
+<circle cx="406.0" cy="258.6" r="10" fill="transparent"><title>원작 · 좀비 45~50천 (25초): 0.24배</title></circle>
+<path class="s-first" d="M190.0,159.1 L226.0,155.4 L262.0,160.2 L298.0,165.6 L334.0,172.6 L370.0,177.9 L406.0,185.2 L442.0,191.5 L478.0,198.6 L514.0,204.4 L550.0,208.8 L586.0,212.4 L622.0,218.5 L658.0,221.7 L694.0,225.4 L730.0,228.6 L766.0,231.6" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="190.0" cy="159.1" r="10" fill="transparent"><title>최초 배포본 · 좀비 15~20천 (4초): 0.73배</title></circle>
+<circle cx="226.0" cy="155.4" r="10" fill="transparent"><title>최초 배포본 · 좀비 20~25천 (5초): 0.75배</title></circle>
+<circle cx="262.0" cy="160.2" r="10" fill="transparent"><title>최초 배포본 · 좀비 25~30천 (6초): 0.73배</title></circle>
+<circle cx="298.0" cy="165.6" r="10" fill="transparent"><title>최초 배포본 · 좀비 30~35천 (8초): 0.70배</title></circle>
+<circle cx="334.0" cy="172.6" r="10" fill="transparent"><title>최초 배포본 · 좀비 35~40천 (8초): 0.67배</title></circle>
+<circle cx="370.0" cy="177.9" r="10" fill="transparent"><title>최초 배포본 · 좀비 40~45천 (9초): 0.64배</title></circle>
+<circle cx="406.0" cy="185.2" r="10" fill="transparent"><title>최초 배포본 · 좀비 45~50천 (10초): 0.60배</title></circle>
+<circle cx="442.0" cy="191.5" r="10" fill="transparent"><title>최초 배포본 · 좀비 50~55천 (11초): 0.57배</title></circle>
+<circle cx="478.0" cy="198.6" r="10" fill="transparent"><title>최초 배포본 · 좀비 55~60천 (11초): 0.54배</title></circle>
+<circle cx="514.0" cy="204.4" r="10" fill="transparent"><title>최초 배포본 · 좀비 60~65천 (12초): 0.51배</title></circle>
+<circle cx="550.0" cy="208.8" r="10" fill="transparent"><title>최초 배포본 · 좀비 65~70천 (14초): 0.49배</title></circle>
+<circle cx="586.0" cy="212.4" r="10" fill="transparent"><title>최초 배포본 · 좀비 70~75천 (15초): 0.47배</title></circle>
+<circle cx="622.0" cy="218.5" r="10" fill="transparent"><title>최초 배포본 · 좀비 75~80천 (15초): 0.44배</title></circle>
+<circle cx="658.0" cy="221.7" r="10" fill="transparent"><title>최초 배포본 · 좀비 80~85천 (17초): 0.42배</title></circle>
+<circle cx="694.0" cy="225.4" r="10" fill="transparent"><title>최초 배포본 · 좀비 85~90천 (20초): 0.41배</title></circle>
+<circle cx="730.0" cy="228.6" r="10" fill="transparent"><title>최초 배포본 · 좀비 90~95천 (20초): 0.39배</title></circle>
+<circle cx="766.0" cy="231.6" r="10" fill="transparent"><title>최초 배포본 · 좀비 95~100천 (22초): 0.38배</title></circle>
+<path class="s-chipmunk" d="M226.0,104.3 L262.0,104.4 L298.0,104.3 L334.0,104.4 L370.0,105.2 L406.0,104.5 L442.0,104.5 L478.0,105.4 L514.0,108.0 L550.0,113.9 L586.0,114.8 L622.0,127.5 L658.0,141.8 L694.0,151.2 L730.0,166.0 L766.0,177.0" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="226.0" cy="104.3" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 20~25천 (4초): 1.00배</title></circle>
+<circle cx="262.0" cy="104.4" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 25~30천 (5초): 1.00배</title></circle>
+<circle cx="298.0" cy="104.3" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 30~35천 (5초): 1.00배</title></circle>
+<circle cx="334.0" cy="104.4" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 35~40천 (5초): 1.00배</title></circle>
+<circle cx="370.0" cy="105.2" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 40~45천 (6초): 1.00배</title></circle>
+<circle cx="406.0" cy="104.5" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 45~50천 (6초): 1.00배</title></circle>
+<circle cx="442.0" cy="104.5" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 50~55천 (7초): 1.00배</title></circle>
+<circle cx="478.0" cy="105.4" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 55~60천 (6초): 0.99배</title></circle>
+<circle cx="514.0" cy="108.0" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 60~65천 (6초): 0.98배</title></circle>
+<circle cx="550.0" cy="113.9" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 65~70천 (7초): 0.95배</title></circle>
+<circle cx="586.0" cy="114.8" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 70~75천 (7초): 0.95배</title></circle>
+<circle cx="622.0" cy="127.5" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 75~80천 (8초): 0.89배</title></circle>
+<circle cx="658.0" cy="141.8" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 80~85천 (9초): 0.82배</title></circle>
+<circle cx="694.0" cy="151.2" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 85~90천 (10초): 0.77배</title></circle>
+<circle cx="730.0" cy="166.0" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 90~95천 (11초): 0.70배</title></circle>
+<circle cx="766.0" cy="177.0" r="10" fill="transparent"><title>Chipmunk (DXVK) · 좀비 95~100천 (12초): 0.64배</title></circle>
+<path class="s-rapier" d="M226.0,104.3 L262.0,104.4 L298.0,104.4 L334.0,104.4 L370.0,105.3 L406.0,104.4 L442.0,104.9 L478.0,104.9 L514.0,105.7 L550.0,109.0 L586.0,112.2 L622.0,120.5 L658.0,135.5 L694.0,140.2 L730.0,148.9 L766.0,156.2" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="226.0" cy="104.3" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 20~25천 (4초): 1.00배</title></circle>
+<circle cx="262.0" cy="104.4" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 25~30천 (5초): 1.00배</title></circle>
+<circle cx="298.0" cy="104.4" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 30~35천 (5초): 1.00배</title></circle>
+<circle cx="334.0" cy="104.4" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 35~40천 (6초): 1.00배</title></circle>
+<circle cx="370.0" cy="105.3" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 40~45천 (5초): 1.00배</title></circle>
+<circle cx="406.0" cy="104.4" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 45~50천 (6초): 1.00배</title></circle>
+<circle cx="442.0" cy="104.9" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 50~55천 (6초): 1.00배</title></circle>
+<circle cx="478.0" cy="104.9" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 55~60천 (7초): 1.00배</title></circle>
+<circle cx="514.0" cy="105.7" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 60~65천 (6초): 0.99배</title></circle>
+<circle cx="550.0" cy="109.0" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 65~70천 (7초): 0.98배</title></circle>
+<circle cx="586.0" cy="112.2" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 70~75천 (7초): 0.96배</title></circle>
+<circle cx="622.0" cy="120.5" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 75~80천 (8초): 0.92배</title></circle>
+<circle cx="658.0" cy="135.5" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 80~85천 (8초): 0.85배</title></circle>
+<circle cx="694.0" cy="140.2" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 85~90천 (10초): 0.82배</title></circle>
+<circle cx="730.0" cy="148.9" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 90~95천 (10초): 0.78배</title></circle>
+<circle cx="766.0" cy="156.2" r="10" fill="transparent"><title>Rapier (DXVK) · 좀비 95~100천 (11초): 0.75배</title></circle>
+<path class="s-chipmunk-vulkan" d="M226.0,104.4 L262.0,104.4 L298.0,104.3 L334.0,104.3 L370.0,105.0 L406.0,104.4 L442.0,104.6 L478.0,104.6 L514.0,104.7 L550.0,105.8 L586.0,106.6 L622.0,106.9 L658.0,107.3 L694.0,104.5 L730.0,105.2 L766.0,106.8" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="226.0" cy="104.4" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 20~25천 (4초): 1.00배</title></circle>
+<circle cx="262.0" cy="104.4" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 25~30천 (5초): 1.00배</title></circle>
+<circle cx="298.0" cy="104.3" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 30~35천 (5초): 1.00배</title></circle>
+<circle cx="334.0" cy="104.3" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 35~40천 (6초): 1.00배</title></circle>
+<circle cx="370.0" cy="105.0" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 40~45천 (5초): 1.00배</title></circle>
+<circle cx="406.0" cy="104.4" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 45~50천 (6초): 1.00배</title></circle>
+<circle cx="442.0" cy="104.6" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 50~55천 (7초): 1.00배</title></circle>
+<circle cx="478.0" cy="104.6" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 55~60천 (6초): 1.00배</title></circle>
+<circle cx="514.0" cy="104.7" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 60~65천 (6초): 1.00배</title></circle>
+<circle cx="550.0" cy="105.8" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 65~70천 (7초): 0.99배</title></circle>
+<circle cx="586.0" cy="106.6" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 70~75천 (7초): 0.99배</title></circle>
+<circle cx="622.0" cy="106.9" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 75~80천 (7초): 0.99배</title></circle>
+<circle cx="658.0" cy="107.3" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 80~85천 (7초): 0.99배</title></circle>
+<circle cx="694.0" cy="104.5" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 85~90천 (8초): 1.00배</title></circle>
+<circle cx="730.0" cy="105.2" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 90~95천 (8초): 1.00배</title></circle>
+<circle cx="766.0" cy="106.8" r="10" fill="transparent"><title>Chipmunk2DVulkan (DXVK) · 좀비 95~100천 (8초): 0.99배</title></circle>
+<circle class="f-chipmunk-vulkan ring" cx="766.0" cy="106.8" r="4.5" stroke-width="2"/>
+<line class="s-chipmunk-vulkan" x1="772.0" y1="106.8" x2="830" y2="106.8" stroke-width="1"/>
+<text class="t1" x="834" y="104.8" font-size="12" font-weight="600">Chipmunk2DVulkan (DXVK)</text>
+<text class="t2" x="834" y="119.8" font-size="11">0.99배</text>
+<circle class="f-rapier ring" cx="766.0" cy="156.2" r="4.5" stroke-width="2"/>
+<line class="s-rapier" x1="772.0" y1="156.2" x2="830" y2="156.2" stroke-width="1"/>
+<text class="t1" x="834" y="154.2" font-size="12" font-weight="600">Rapier (DXVK)</text>
+<text class="t2" x="834" y="169.2" font-size="11">0.75배</text>
+<circle class="f-chipmunk ring" cx="766.0" cy="177.0" r="4.5" stroke-width="2"/>
+<line class="s-chipmunk" x1="772.0" y1="177.0" x2="830" y2="186.2" stroke-width="1"/>
+<text class="t1" x="834" y="184.2" font-size="12" font-weight="600">Chipmunk (DXVK)</text>
+<text class="t2" x="834" y="199.2" font-size="11">0.64배</text>
+<circle class="f-first ring" cx="766.0" cy="231.6" r="4.5" stroke-width="2"/>
+<line class="s-first" x1="772.0" y1="231.6" x2="830" y2="231.6" stroke-width="1"/>
+<text class="t1" x="834" y="229.6" font-size="12" font-weight="600">최초 배포본</text>
+<text class="t2" x="834" y="244.6" font-size="11">0.38배</text>
+<circle class="f-original ring" cx="406.0" cy="258.6" r="4.5" stroke-width="2"/>
+<text class="t1" x="416.0" y="256.6" font-size="12" font-weight="600">원작</text>
+<text class="t2" x="416.0" y="271.6" font-size="11">0.24배</text>
 </svg>

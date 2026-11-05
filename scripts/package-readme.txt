@@ -9,7 +9,7 @@ https://github.com/ironpark/TheyAreBeer
 
 설정: 게임 옵션 창의 "최적화" 탭에서 물리 엔진, 렌더러, DXVK 최대 FPS 등을 바꿉니다(적용을 누르면 저장).
 직접 고치려면 %APPDATA%\TABPerf\engine.json (없으면 만듭니다. 게임을 다시 시작하면 적용)
-  "physicsEngine": "chipmunk"(기본) | "rapier" | "original"
+  "physicsEngine": "chipmunk"(기본) | "rapier" | "chipmunk-vulkan"(GPU, Vulkan) | "original"
   "renderer": "dxvk"(기본, Direct3D 9 on Vulkan) | "d3d9"(시스템 Direct3D 9)
 예: { "physicsEngine": "rapier" }
 

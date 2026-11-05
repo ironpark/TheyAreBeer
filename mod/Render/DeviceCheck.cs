@@ -42,6 +42,8 @@ namespace Billions
 
         // In a scene on the render thread with a successful check already made (what the renderer's own check would return).
         internal static bool SceneOk { get { return _inScene && _ok != null && Thread.CurrentThread.ManagedThreadId == _tid; } }
+        // SceneOk for a caller known to be on the scene's thread (SceneDraw): no thread id lookup
+        internal static bool SceneDeviceOk { get { return _inScene && _ok != null; } }
 
         static void SceneStart() { _ok = null; _tid = Thread.CurrentThread.ManagedThreadId; _inScene = true; }
         static void SceneEnd() { _inScene = false; _ok = null; }

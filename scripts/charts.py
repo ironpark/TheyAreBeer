@@ -1,5 +1,5 @@
 # Draws the benchmark charts (docs/charts/*.svg) from scripts\bench.ps1 and compare.exe results.
-#   python scripts/charts.py --game <bench dir with original-1.csv, first-1.csv, chipmunk-1.csv, rapier-1.csv (TABBench CSVs)>
+#   python scripts/charts.py --game <bench dir with original-1.csv, first-1.csv, chipmunk-1.csv, rapier-1.csv, chipmunk-vulkan-1.csv (TABBench CSVs)>
 #                            [--compare <compare.txt>] [--d3d9 <rapier-1.csv> ...] [--dxvk <rapier-1.csv> ...] [--out docs/charts]
 # --d3d9 / --dxvk: runs of the same test without and with DXVK (the mod's diagnostic CSVs, bench.ps1 -Diag); the runs of
 # each side are pooled per zombie bin.
@@ -8,13 +8,13 @@
 import argparse, csv, math, os, re, sys
 
 ENGINES = [('original', '원작'), ('chipmunk', 'Chipmunk 다중 코어'), ('rapier', 'Rapier')]   # compare.exe charts
-TARGETS = [('original', '원작'), ('first', '최초 배포본'), ('chipmunk', 'Chipmunk (DXVK)'), ('rapier', 'Rapier (DXVK)')]   # game charts
-# categorical slots 1-4 in order (validated, light and dark, with direct labels); color follows the target in every chart
-COLOR = {'original': ('#2a78d6', '#3987e5'), 'chipmunk': ('#eb6834', '#d95926'), 'rapier': ('#1baf7a', '#199e70'), 'first': ('#eda100', '#c98500'),
+TARGETS = [('original', '원작'), ('first', '최초 배포본'), ('chipmunk', 'Chipmunk (DXVK)'), ('rapier', 'Rapier (DXVK)'), ('chipmunk-vulkan', 'Chipmunk2DVulkan (DXVK)')]   # game charts
+# categorical slots 1-5 in order (validated, light and dark, with direct labels); color follows the target in every chart
+COLOR = {'original': ('#2a78d6', '#3987e5'), 'chipmunk': ('#eb6834', '#d95926'), 'rapier': ('#1baf7a', '#199e70'), 'first': ('#eda100', '#c98500'), 'chipmunk-vulkan': ('#e87ba4', '#d55181'),
          'd3d9': ('#898781', '#898781'), 'dxvk': ('#2a78d6', '#3987e5')}
 FONT = 'system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif'
 W, H = 1000, 360
-ML, MR, MT, MB = 64, 150, 84, 52   # right margin holds the direct labels
+ML, MR, MT, MB = 64, 180, 84, 52   # right margin holds the direct labels
 
 
 def style(keys):
@@ -87,11 +87,15 @@ class Chart:
         edge.sort()
         for i in range(1, len(edge)):
             if edge[i][0] - edge[i - 1][0] < 30: edge[i][0] = edge[i - 1][0] + 30
+        # inner labels that would overlap (ends close together) are stacked downwards, joined by a leader line
+        inner.sort()
+        for i in range(1, len(inner)):
+            for k in range(i):
+                if abs(inner[i][1] - inner[k][1]) < 170 and inner[i][0] - inner[k][0] < 30: inner[i][0] = inner[k][0] + 30
         for ly, ex, key, label, val in edge + inner:
             ey = self._endy(key); lx = W - MR + 14 if [ly, ex, key, label, val] in edge else ex + 10
-            if [ly, ex, key, label, val] in inner: ly = ey
             o.append(f'<circle class="f-{key} ring" cx="{ex:.1f}" cy="{ey:.1f}" r="4.5" stroke-width="2"/>')
-            if lx > ex + 10: o.append(f'<line class="s-{key}" x1="{ex + 6:.1f}" y1="{ey:.1f}" x2="{lx - 4}" y2="{ly:.1f}" stroke-width="1"/>')
+            if lx > ex + 10 or abs(ly - ey) > 1: o.append(f'<line class="s-{key}" x1="{ex + 6:.1f}" y1="{ey:.1f}" x2="{lx - 4}" y2="{ly:.1f}" stroke-width="1"/>')
             o.append(f'<text class="t1" x="{lx}" y="{ly - 2:.1f}" font-size="12" font-weight="600">{esc(label)}</text>')
             o.append(f'<text class="t2" x="{lx}" y="{ly + 13:.1f}" font-size="11">{esc(val)}</text>')
         o.append('</svg>')

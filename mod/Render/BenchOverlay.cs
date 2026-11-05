@@ -10,13 +10,15 @@ namespace Billions
 {
     // The benchmark's on-screen widget (InGameBench), top right: the numbers of the last second and two graphs of the last
     // 60 seconds (FPS, game speed). The whole widget is drawn with GDI+ into one bitmap once per second and shown as one
-    // scene object in screen pixels (the game's text objects do not place in screen pixels); the previous texture is
-    // freed each time. Exists only while a benchmark runs.
+    // scene object in screen pixels (the game's text objects do not place in screen pixels); the bitmap and its image are
+    // made once per run, and each redraw drops the image's GPU texture so the next draw uploads the new pixels. Exists
+    // only while a benchmark runs.
     internal static class BenchOverlay
     {
         const int Bars = 60;
         static DXObject _o;
-        static DXImage _img;
+        static DXImageBitmap _img;
+        static Bitmap _bmp;
         static readonly double[] _fps = new double[Bars], _speed = new double[Bars];
         static int _n;
         static float _s;
@@ -43,7 +45,9 @@ namespace Billions
                 _fTitle = MakeFont(19 * _s, FontStyle.Bold); _fLabel = MakeFont(15 * _s, FontStyle.Regular);
                 _fValue = MakeFont(27 * _s, FontStyle.Bold); _fSmall = MakeFont(13 * _s, FontStyle.Regular);
                 _n = 0; Array.Clear(_fps, 0, Bars); Array.Clear(_speed, 0, Bars);
-                _o = new DXObject("TABPerfBench", DXImage.FromColor(Color.Transparent));
+                _bmp = new Bitmap(_w, _h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                _img = new DXImageBitmap(_bmp);
+                _o = new DXObject("TABPerfBench", _img);
                 _o.State.AreaStyle = DXObjectState.TAreaStyle.AreaInPixels;
                 float margin = 16 * _s;
                 _o.State.Area = new RectangleF(scr.Width - _w - margin, margin, _w, _h);   // same margin from the top and the right
@@ -67,9 +71,9 @@ namespace Billions
         static void Draw(double sec, int zombies, double fps, double frameMs, double drawMs, double ticks, double speed, double cores, string note)
         {
             var inv = CultureInfo.InvariantCulture;
-            var bmp = new Bitmap(_w, _h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(bmp))
+            using (var g = Graphics.FromImage(_bmp))
             {
+                g.Clear(Color.Transparent);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                 float pad = 16 * _s;
@@ -95,11 +99,7 @@ namespace Billions
                 Graph(g, pad, gTop + gH + 24 * _s, gW, gH, Lang.T("게임 속도 · 1.0 = 제 속도", "Game speed · 1.0 = full"), _speed, 1.2, 0.9, SpeedC, SpeedLow, 1.0);
                 if (!string.IsNullOrEmpty(note)) using (var bs = new SolidBrush(Label)) { var sz = g.MeasureString(note, _fSmall); g.DrawString(note, _fSmall, bs, _w - pad - sz.Width, gTop - 2 * _s); }
             }
-            var img = new DXImageBitmap(bmp);
-            var old = _img;
-            _img = img;
-            _o.Image = img;
-            if (old != null) try { old.Dispose(); } catch { }
+            _img.UnloadFromGPU();   // the next draw uploads the new pixels (render thread, as the draw)
         }
 
         static void Cell(Graphics g, float x, float y, string label, string value, string unit)
@@ -143,7 +143,8 @@ namespace Billions
             try { if (_o != null) _o.RemoveFromParent(); } catch { }
             _o = null;
             if (_img != null) try { _img.Dispose(); } catch { }
-            _img = null;
+            if (_bmp != null) _bmp.Dispose();
+            _img = null; _bmp = null;
             foreach (var f in new[] { _fTitle, _fLabel, _fValue, _fSmall }) if (f != null) f.Dispose();
             _fTitle = _fLabel = _fValue = _fSmall = null;
         }

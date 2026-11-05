@@ -95,8 +95,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bench.ps1 -Dxvk
 ### 자주 쓰는 실행
 
 ```powershell
-# README의 측정: 네 대상, 현재 모드는 DXVK
-.\scripts\bench.ps1 -Dxvk
+# README의 측정: 다섯 대상, 현재 모드는 DXVK
+.\scripts\bench.ps1 -Target original,first,chipmunk,rapier,chipmunk-vulkan -Dxvk
 
 # 현재 모드 두 엔진만, 편차를 보려고 3번
 .\scripts\bench.ps1 -Target chipmunk,rapier -Runs 3

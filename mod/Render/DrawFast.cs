@@ -285,6 +285,15 @@ namespace Billions
             Compare(r, o, before);
         }
 
+        // SceneDraw's calls: Ready once per pass (the renderer and the modes do not change during one), then DrawReady per
+        // sprite, which only checks the device state cached for this scene (SceneDraw draws on the render thread between
+        // the renderer's StartScene and FinishScene, so Draw's thread and null checks always pass there)
+        internal static bool Ready(IDXRenderer r) { return On && !Measure && !Check && r != null && r.GetType() == _rt; }
+        internal static void DrawReady(IDXRenderer r, DXObject o)
+        {
+            if (!DeviceCheck.SceneDeviceOk || !TryFast(r, o, null)) r.DrawObject(o);
+        }
+
         static bool TryFast(IDXRenderer r, DXObject o, Array dest)
         {
             try { return _fn(r, o, dest); }

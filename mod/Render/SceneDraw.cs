@@ -28,6 +28,7 @@ namespace Billions
     {
         public static bool Installed { get; private set; }
         public static double LastMs;
+        static bool _ready;   // DrawFast.Ready for the pass being drawn
 
         public static void Install(Harmony h)
         {
@@ -123,6 +124,7 @@ namespace Billions
         {
             if (!r.Enabled) return false;
             r.StartScene(s, background, target);
+            _ready = DrawFast.Ready(r);
             s._DrawnEndObjects = false;
             DrawObject(s, r, s.RootObject);
             if (!s._DrawnEndObjects) DrawEndObjects(s, r);
@@ -211,6 +213,7 @@ namespace Billions
         {
             if (!r.Enabled) return false;
             r.StartScene(s, s.BackgroundColor, target);
+            _ready = DrawFast.Ready(r);
             DrawObject(s, r, o);
             if (!r.Enabled) return false;
             r.FinishScene();
@@ -297,16 +300,16 @@ namespace Billions
             {
                 if (st._Opacity <= 0f) return;
                 int mode = (int)o._BlendMode;
-                if (mode < 10) { DrawFast.Draw(r, o); return; }
+                if (mode < 10) { Sprite(r, o); return; }
                 float opacity = st._Opacity;
                 o._BlendMode = DXObject.TBlendMode.Add;
                 st.Opacity = opacity * (1f - mode / 100f);
                 o._ColorMatrix = o.ColorMatrix;
-                DrawFast.Draw(r, o);
+                Sprite(r, o);
                 o._BlendMode = DXObject.TBlendMode.Normal;
                 st.Opacity = opacity * (mode / 100f);
                 o._ColorMatrix = o.ColorMatrix;
-                DrawFast.Draw(r, o);
+                Sprite(r, o);
                 o._BlendMode = (DXObject.TBlendMode)mode;
                 st._Opacity = opacity;
             }
@@ -315,6 +318,11 @@ namespace Billions
                 DXHelper_Console.Debug_WriteLine("DXScene:DrawObject: [" + o.ID + "] Exception:" + ex.Message);
                 r.DrawObject(o);
             }
+        }
+
+        static void Sprite(IDXRenderer r, DXObject o)
+        {
+            if (_ready) DrawFast.DrawReady(r, o); else DrawFast.Draw(r, o);
         }
 
         // A clipping object: its pixel area (on the render area) intersected with the open scissor rectangles. An empty

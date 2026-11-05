@@ -8,8 +8,9 @@ They Are Billions 최적화 패치(TABPerf). 이 저장소의 소스로 GitHub A
 **들어 있는 것**
 - 엔진 모드 `TABPerf.dll`
 - 게임 옵션 창의 **최적화** 탭(물리 엔진, 렌더러, DXVK 최대 FPS 등)
-- 물리 엔진: Chipmunk2D 다중 코어(기본), Rapier 2D(`engine.json`의 `"physicsEngine": "rapier"`)
+- 물리 엔진: Chipmunk2D 다중 코어(기본), Rapier 2D(`engine.json`의 `"physicsEngine": "rapier"`), Chipmunk2D Vulkan(GPU, `"chipmunk-vulkan"`)
 - 그래픽: DXVK 3.1.1(기본, `"renderer": "d3d9"`로 끔)
+- 최적화 탭의 **벤치마크 시작**: 고정 생존 맵에서 좀비 10만 마리까지 지금 설정으로 측정
 - 라이선스 문서(`licenses\`)
 
 설정, 성능 측정, 변경 기록은 [README](https://github.com/ironpark/TheyAreBeer#readme)와 [CHANGELOG](https://github.com/ironpark/TheyAreBeer/blob/main/CHANGELOG.md)에 있습니다.

@@ -147,10 +147,6 @@ def main():
             if t in runs: c.add(t, n, binned(runs[t], 'game_speed'), lambda v: f'{v:.2f}배')
         c.ref(1.0, '제 속도')
         write(a.out, 'game-speed.svg', c.svg(xt, [0, 0.25, 0.5, 0.75, 1.0], man, lambda v: f'{v:g}'))
-        c = Chart('프레임 시간', f'프레임 시작에서 다음 프레임 시작까지 (측정 모드 시간 뺌). {sub}', '좀비 수', 'ms', (0, 105000), (0, 160))
-        for t, n in TARGETS:
-            if t in runs: c.add(t, n, binned(runs[t], 'frame_ms'), lambda v: f'{v:.0f} ms')
-        write(a.out, 'frame-time.svg', c.svg(xt, [0, 40, 80, 120, 160], man, lambda v: f'{v:g}'))
         c = Chart('프로세스 CPU 사용량', f'그 1초 동안 게임 프로세스 전체가 쓴 CPU 시간 (논리 코어 수). {sub}', '좀비 수', '코어', (0, 105000), (0, 24))
         for t, n in TARGETS:
             if t in runs: c.add(t, n, binned(runs[t], 'cpu_cores'), lambda v: f'{v:.1f}코어')

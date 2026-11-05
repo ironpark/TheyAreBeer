@@ -1,5 +1,3 @@
-# TheyAreBeer
-
 ![TheyAreBeer](docs/theyarebeer.png)
 
 ## They Are Billions [~데아-비루~](https://www.youtube.com/watch?v=oiFN6TqFWn8) 최적화 모드

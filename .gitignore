@@ -29,3 +29,6 @@ Desktop.ini
 
 # Benchmark results (scripts/bench.ps1)
 /bench-out/
+
+# Release packages (scripts/package.ps1)
+/dist/

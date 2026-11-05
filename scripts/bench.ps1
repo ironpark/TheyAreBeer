@@ -10,7 +10,8 @@
 #             Built once from git into native\out\first-release.
 #   chipmunk  the current mod, Chipmunk multi-core engine (the installed Mods\TABPerf)
 #   rapier    the current mod, Rapier engine
-# -Dxvk runs chipmunk and rapier with DXVK (the original and the first release cannot load it).
+# -Dxvk runs chipmunk and rapier with DXVK (the original and the first release cannot load it); without it they use the
+# system Direct3D 9. -Renderer dxvk|d3d9 picks the current mod's renderer directly (-Renderer dxvk = -Dxvk).
 #
 # Every run uses the same measuring mod, TABBench (bench\out, scripts\build.ps1 -Target bench), installed into
 # Mods\TABBench for the runs only: it starts a fixed survival game (seed -Seed) zoomed out as far as the game allows,
@@ -31,6 +32,7 @@
 param(
   [string[]]$Target = @('original', 'first', 'chipmunk', 'rapier'),
   [switch]$Dxvk,
+  [ValidateSet('', 'dxvk', 'd3d9')][string]$Renderer = '',
   [int]$Zombies = 100000,
   [int]$OriginalZombies = 50000,
   [int]$Runs = 1,
@@ -77,9 +79,9 @@ if (-not (Get-Process steam -ErrorAction SilentlyContinue)) { Write-Warning 'Ste
 
 # DXVK for the current mod: the installed one, else the copy install.ps1 downloaded (put in for the runs only)
 $dxvkDir = Join-Path $mod 'dxvk'; $dxvkAdded = $false
-if ($Dxvk -and ($Target -contains 'chipmunk' -or $Target -contains 'rapier') -and -not (Test-Path (Join-Path $dxvkDir 'd3d9.dll'))) {
+if (($Dxvk -or $Renderer -eq 'dxvk') -and ($Target -contains 'chipmunk' -or $Target -contains 'rapier') -and -not (Test-Path (Join-Path $dxvkDir 'd3d9.dll'))) {
   $d = Join-Path $repo 'native\out\dxvk\d3d9.dll'
-  if (-not (Test-Path $d)) { throw 'DXVK is not available - run scripts\install.ps1 -Dxvk on once (it downloads it), or leave -Dxvk out' }
+  if (-not (Test-Path $d)) { throw 'DXVK is not available - run scripts\install.ps1 once (it downloads it), or leave -Dxvk out' }
 }
 
 # The first release, built once from its commit (its own build scripts) into native\out\first-release
@@ -111,7 +113,7 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 
 $vars = 'TABBENCH_CSV', 'TABBENCH_AUTO', 'TABBENCH_SEED', 'TABBENCH_DELAY', 'TABBENCH_FACTOR', 'TABBENCH_ZOMBIES', 'TABBENCH_TIMEOUT', 'TABBENCH_ZOOM', 'TABBENCH_TERRAIN',
-        'TABPERF_ENGINE', 'TABPERF_DXVK', 'TABPERF_BENCH', 'TABPERF_BENCH_CSV', 'TABPERF_BENCH_THREADS', 'DX_RAPIER_COUNTERS'
+        'TABPERF_ENGINE', 'TABPERF_RENDERER', 'TABPERF_BENCH', 'TABPERF_BENCH_CSV', 'TABPERF_BENCH_THREADS', 'DX_RAPIER_COUNTERS'
 
 # Game folder state for one target; Restore-Game puts everything back.
 function Set-Game($t) {
@@ -128,7 +130,7 @@ function Set-Game($t) {
     Copy-Item (Join-Path $first 'DXPhysicsNative.dll') $gameDll -Force
   }
   elseif (Test-Path $gameDllSaved) { Copy-Item $gameDllSaved $gameDll -Force; Remove-Item $gameDllSaved }
-  if ($wantCurrent -and $Dxvk -and -not (Test-Path (Join-Path $dxvkDir 'd3d9.dll'))) {
+  if ($wantCurrent -and ($Dxvk -or $Renderer -eq 'dxvk') -and -not (Test-Path (Join-Path $dxvkDir 'd3d9.dll'))) {
     New-Item -ItemType Directory -Force $dxvkDir | Out-Null
     Copy-Item (Join-Path $repo 'native\out\dxvk\d3d9.dll') $dxvkDir; $script:dxvkAdded = $true
   }
@@ -152,7 +154,7 @@ function Summarize($csv, $t, $run) {
   function Avg($set, $col) { $v = @($set | ForEach-Object { [double]::Parse($_.$col, $inv) }); if ($v.Count) { ($v | Measure-Object -Average).Average } else { 0 } }
   $heavy = @($live | Where-Object { [int]$_.zombies -ge 90000 })
   [pscustomobject][ordered]@{
-    target = $t; dxvk = [bool]($Dxvk -and ($t -eq 'chipmunk' -or $t -eq 'rapier')); run = $run
+    target = $t; renderer = $(if ($t -eq 'chipmunk' -or $t -eq 'rapier') { $(if ($Renderer) { $Renderer } elseif ($Dxvk) { 'dxvk' } else { 'd3d9' }) } else { 'd3d9' }); run = $run
     end = $last.note; zombies_max = ($rows | ForEach-Object { [int]$_.zombies } | Measure-Object -Maximum).Maximum
     real_s = [math]::Round([double]::Parse($last.t_s, $inv) - $t0, 0)      # from the swarm to the end of the run
     game_s = [math]::Round([double]::Parse($last.game_time_s, $inv) - $(if ($swarm.Count) { [double]::Parse($swarm[0].game_time_s, $inv) } else { 0 }), 0)
@@ -180,9 +182,9 @@ try {
       Remove-Item $csv -ErrorAction SilentlyContinue
       $env:TABBENCH_CSV = $csv
       $env:TABBENCH_ZOMBIES = $(if ($t -eq 'original') { "$OriginalZombies" } else { "$Zombies" })
-      foreach ($v in 'TABPERF_ENGINE', 'TABPERF_DXVK', 'TABPERF_BENCH', 'TABPERF_BENCH_CSV', 'TABPERF_BENCH_THREADS', 'DX_RAPIER_COUNTERS') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+      foreach ($v in 'TABPERF_ENGINE', 'TABPERF_RENDERER', 'TABPERF_BENCH', 'TABPERF_BENCH_CSV', 'TABPERF_BENCH_THREADS', 'DX_RAPIER_COUNTERS') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
       if ($t -eq 'chipmunk' -or $t -eq 'rapier') {
-        $env:TABPERF_ENGINE = $t; $env:TABPERF_DXVK = $(if ($Dxvk) { '1' } else { '0' })
+        $env:TABPERF_ENGINE = $t; $env:TABPERF_RENDERER = $(if ($Renderer) { $Renderer } elseif ($Dxvk) { 'dxvk' } else { 'd3d9' })
         if ($Diag) {
           $env:TABPERF_BENCH = '1'; $env:TABPERF_BENCH_CSV = Join-Path $OutDir "$t-diag-$r.csv"; $env:TABPERF_BENCH_THREADS = "$Threads"
           if ($Counters) { $env:DX_RAPIER_COUNTERS = '1' }
@@ -214,5 +216,5 @@ if (-not $results.Count) { throw 'No run produced results (see %APPDATA%\TABPerf
 $summary = Join-Path $OutDir 'summary.csv'
 $results | Export-Csv $summary -NoTypeInformation -Encoding UTF8
 ''
-$results | Format-Table target, dxvk, run, end, zombies_max, real_s, game_s, speed_90k, frame_ms_90k, logic_wait_ms_90k, cpu_cores_90k -AutoSize | Out-String | Write-Host
+$results | Format-Table target, renderer, run, end, zombies_max, real_s, game_s, speed_90k, frame_ms_90k, logic_wait_ms_90k, cpu_cores_90k -AutoSize | Out-String | Write-Host
 Write-Host "Results: $OutDir (summary.csv, <target>-<run>.csv). Charts: python scripts\charts.py --game $OutDir"

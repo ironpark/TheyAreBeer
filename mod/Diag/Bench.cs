@@ -95,7 +95,7 @@ namespace Billions
             {
                 if (_engine == null)
                 {
-                    _engine = PerfMod.PhysicsDll().Replace(',', ' ') + (Dxvk.Loaded ? " + DXVK" : ""); Log.Info("bench: 물리 DLL — " + _engine);
+                    _engine = PerfMod.PhysicsDll().Replace(',', ' ') + (D3d9.Label.Length > 0 ? " + " + D3d9.Label : ""); Log.Info("bench: 물리 DLL — " + _engine);
                     // Rapier's stage counters cost about 7% of the step, so they are on only with DX_RAPIER_COUNTERS=1 (bench.ps1 -Counters)
                     if (PerfMod.PhysOpt(200, 0) == 2) Log.Info("bench: Rapier 단계 카운터 " + (PerfMod.PhysOpt(204, -1) == 1 ? "켬" : "끔"));
                     // the wrapper's timed call and query diagnostics (n_angle_* ... q_*) read clocks on hot paths: on for the bench only

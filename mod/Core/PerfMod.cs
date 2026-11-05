@@ -11,7 +11,7 @@ namespace Billions
 
     public class PerfMod : IModEntry
     {
-        public const string Version = "1.0.0";
+        public const string Version = "0.0.1";
         const string LoadedKey = "tabperf.optimization.loaded";
         static bool _installed;
 
@@ -32,7 +32,7 @@ namespace Billions
                 var dom = AppDomain.CurrentDomain; object first = dom.GetData(LoadedKey);
                 if (first != null) { Log.Info("이 패치가 이미 다른 폴더에서 실렸다(" + first + ") — 여기(" + (mod != null ? mod.ModPath : "?") + ")는 쉰다"); return; }
                 dom.SetData(LoadedKey, mod != null && mod.ModPath != null ? mod.ModPath : "?");
-                Dxvk.Load(mod != null ? mod.ModPath : null);   // first: before the game's renderer loads d3d9.dll
+                D3d9.Load(mod != null ? mod.ModPath : null);   // first: before the game's renderer loads d3d9.dll
                 Install(mod != null ? mod.ModPath : null);
             }
             catch (Exception e) { Log.Error("perf OnLoad", e); }
@@ -86,6 +86,7 @@ namespace Billions
             // measuring hooks only while something reads them (the diagnostic recording or the tick profile)
             if (Bench.Enabled || TickProf.On) Step("로직 갱신 계측", () => LogicProf.Install(h));
             Step("로직 틱 내부 계측", () => TickProf.Install(h));
+            Step("렌더러 조사", RenderDump.Run);
             Log.Info("설치 끝 — 물리 DLL: " + PhysicsDll());
         }
 

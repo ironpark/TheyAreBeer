@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-11-05
+
+첫 릴리스입니다. 최초 배포본(`ef035e1`) 이후의 변경을 모두 담습니다.
+
+### 그래픽과 배포
+
+#### 변경
+- 그래픽을 `engine.json`의 `"renderer"`로 고릅니다. `dxvk`(기본)는 모드 폴더의 DXVK, `d3d9`는 시스템 Direct3D 9입니다. 예전의 `"dxvk": true/false`는 더 읽지 않고 설치 스크립트가 지웁니다. 환경 변수는 `TABPERF_RENDERER`입니다(`TABPERF_DXVK` 대신).
+- `scripts\install.ps1`이 DXVK를 기본으로 받아 넣습니다(`-NoDxvk`로 뺌). `-Dxvk on|off` 대신 `-Renderer dxvk|d3d9`를 씁니다.
+- 모드 버전을 0.0.1로 정했습니다.
+
+#### 추가
+- `scripts\package.ps1`: 배포용 `dist\TABPerf-v<버전>.zip`을 만듭니다. 모드, 두 물리 엔진, DXVK, 라이선스 문서가 들어갑니다.
+- GitHub Actions(`.github/workflows/build.yml`): Windows에서 전체 빌드와 패키지를 하고, `v*` 태그를 푸시하면 릴리스를 만듭니다. ([빌드 문서](docs/BUILD.md#배포-파일))
+- 측정 도구 `TABPERF_RENDERDUMP=1`: 게임 렌더러의 구조와 쓰는 SlimDX 기능을 파일로 남깁니다(렌더러 교체 검토용).
+- D3D9On12(Direct3D 9를 Direct3D 12로)는 시험한 뒤 넣지 않았습니다. 창이 약 800×600보다 크면 `Present`는 성공해도 화면에 아무것도 나오지 않았습니다. 시스템 D3D9, D3D11, D3D12, D3D9Ex FLIPEX는 같은 크기에서 정상이었습니다(원격 데스크톱에서 확인).
+
 - 전반적인 안정성 향상
 - 빌드 스크립트와 도구 개선
 - 물리 엔진 교체 기능 추가 ([Rapier](https://rapier.rs/) 2D)

@@ -78,6 +78,16 @@ Rapier 빌드는 Rapier의 공식 C 바인딩을 [공식 문서](https://rapier.
 4. `-DRAPIER_DIMENSION=2 -DRAPIER_PRECISION=32 -DRAPIER_ENABLE_PARALLEL=ON -DRAPIER_SIMD_LANES=8 -DRAPIER_FEATURES=profiler`로 세 번 빌드하고 CMake 통합 테스트를 돌립니다. 모든 x64 CPU용, AVX2·FMA용(Rust `+avx2,+fma`), AVX-512용(여기에 `+avx512f,+avx512vl,+avx512bw,+avx512dq,+avx512cd`)이며 모두 8레인 솔버입니다. Rust 쪽은 fat LTO·코드 생성 단위 1개로 빌드합니다(Cargo 환경 변수 `CARGO_PROFILE_RELEASE_LTO=fat`). 빌드 PC가 그 명령어를 지원하지 않으면 그 빌드의 테스트는 건너뜁니다.
 5. 같은 정의(`RAPIER_DIM2`, `RAPIER_F32`, `RAPIER_PARALLEL`)로 `DXPhysicsNative.dll`을 빌드합니다. 이 DLL은 CPU와 OS가 지원하는 가장 높은 빌드(AVX-512 → AVX2 → 기본)를 같은 폴더에서 불러옵니다. 파일이 없으면 다음 단계로 내려갑니다.
 
+## 배포 파일
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\package.ps1
+```
+
+모두 빌드한 뒤 실행하면 `dist\TABPerf-v<버전>.zip`을 만듭니다(버전은 `mod\ModInfos.json`의 `Version`). 압축 파일에는 `TABPerf` 폴더 하나가 들어 있습니다. 설치 스크립트가 게임에 넣는 구성과 같으며, 여기에 DXVK, `README.txt`, 라이선스 문서(`licenses\`: 이 패치 MIT, Chipmunk2D MIT, Rapier Apache-2.0, DXVK zlib)가 더해집니다.
+
+GitHub Actions(`.github/workflows/build.yml`)는 `main` 푸시와 풀 리퀘스트마다 Windows에서 세팅(`-NoPatch`), 전체 빌드, 패키지를 돌리고 압축 파일을 아티팩트로 남깁니다. `v<버전>` 태그를 푸시하면 같은 압축 파일로 GitHub 릴리스를 만듭니다. 태그는 `ModInfos.json`의 `Version`과 같아야 합니다.
+
 ### 모드로더 패딩
 
 물리 DLL을 수정할 때는 `native/dxphysics/dxdiag.c`의 `dx_text_pad`를 유지해야 합니다. TABModLoader가 DLL 시작 주소의 `+0x13B3` 위치에 5바이트를 덮어쓰기 때문에, 해당 공간에 실제 코드가 배치되면 게임이 종료될 수 있습니다. 빌드 스크립트는 두 물리 DLL 모두 링크 맵에서 이 위치를 검사하고, 어긋나면 빌드를 실패시킵니다. Rapier 판은 같은 이유로 Rust 코드를 `DXPhysicsNative.dll`에 정적으로 넣지 않고, 별도의 `rapier2d_ffi.dll`에서 지연 로드합니다. Rust 코드는 일반 `.text` 섹션에 들어가 패딩보다 앞에 놓이기 때문입니다.

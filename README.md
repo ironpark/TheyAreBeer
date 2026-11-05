@@ -46,6 +46,14 @@ They Are Billions 최적화 패치
 
 ## 설치
 
+[TABModLoader](https://codeberg.org/JKstring/TABModLoader)(1.1.x)가 설치된 게임에 넣습니다.
+
+### 릴리스 파일로 설치
+
+[Releases](https://github.com/ironpark/TheyAreBeer/releases)에서 `TABPerf-v<버전>.zip`을 받아, 압축 파일 안의 `TABPerf` 폴더를 `<게임 설치 폴더>\Mods\`에 그대로 넣습니다(`Mods\TABPerf\TABPerf.dll`이 되도록). 물리 엔진 두 가지와 DXVK, 라이선스 문서가 함께 들어 있습니다. 릴리스 파일은 GitHub Actions가 저장소의 소스로 빌드합니다(`.github/workflows/build.yml`).
+
+### 소스에서 빌드해 설치
+
 먼저 [빌드 문서](docs/BUILD.md)대로 모드와 물리 엔진을 빌드합니다. 빌드 문서에는 게임 확인·참조 파일·모드로더 패치를 하는 세팅 스크립트도 있습니다.
 
 설치 스크립트가 빌드 결과물을 게임의 `Mods\TABPerf`에 넣습니다. 게임 파일은 바꾸지 않습니다. 게임을 끈 상태에서 실행하세요.
@@ -67,13 +75,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Engine chipmunk
       │  ├─ rapier2d_ffi.dll
       │  ├─ rapier2d_ffi_avx2.dll
       │  └─ rapier2d_ffi_avx512.dll
-      └─ dxvk/                        # -Dxvk on 일 때
-         └─ d3d9.dll
+      └─ dxvk/                        # DXVK (-NoDxvk 이면 빠짐)
+         ├─ d3d9.dll
+         └─ LICENSE
 ```
 
 - `-Engine chipmunk|rapier|original`은 `engine.json`의 `physicsEngine`을 함께 정합니다(아래 [물리 엔진 선택](#물리-엔진-선택)). 생략하면 설정을 바꾸지 않습니다.
 - 빌드하지 않은 엔진은 건너뜁니다.
-- `-Dxvk on|off`는 DXVK를 넣거나 빼고 `engine.json`의 `dxvk`를 함께 정합니다(아래 [DXVK](#dxvk-선택)).
+- DXVK를 한 번 받아 함께 넣습니다(`-NoDxvk`면 넣지 않음). `-Renderer dxvk|d3d9`는 `engine.json`의 `renderer`를 정합니다(아래 [그래픽](#그래픽-dxvk)).
 - 예전 설치 방식이 남긴 파일을 정리합니다. 모드 폴더 바로 아래의 물리 DLL을 지우고, 게임 폴더에 `DXPhysicsNative.dll.orig`가 있으면 대체본으로 바뀐 게임 폴더의 DLL을 그것으로 되돌립니다.
 - 게임이 실행 중이면 멈춥니다. 게임 폴더에 쓸 권한이 없으면 관리자 PowerShell에서 다시 실행하라고 안내합니다.
 
@@ -105,8 +114,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Engine chipmunk
 | --- | --- |
 | `billions.log` | 모드 로드, 개별 최적화 적용, 물리 DLL 적용 여부 및 오류 기록 |
 | `options.json` | 게임 그래픽 옵션의 **좀비 체력바 가볍게** 설정 저장. 기본값은 꺼짐 |
-| `engine.json` | 선택적으로 물리 엔진(`physicsEngine`), 물리 계산 반복 횟수(`physicsIterations`), 빠른 타이머(`fastTiming`), 로직 따라잡기(`logicMaxLag`), DXVK(`dxvk`, `dxvkMaxFps`), 성능 시험 설정 지정 |
-| `TheyAreBillions_d3d9.log` | DXVK를 켰을 때 DXVK의 로그 |
+| `engine.json` | 선택적으로 물리 엔진(`physicsEngine`), 물리 계산 반복 횟수(`physicsIterations`), 빠른 타이머(`fastTiming`), 로직 따라잡기(`logicMaxLag`), 그래픽(`renderer`, `dxvkMaxFps`), 진단 기록 설정 지정 |
+| `TheyAreBillions_d3d9.log` | DXVK로 돌 때 DXVK의 로그 |
 | `dxphysics-crash.txt` | 네이티브 DLL 내부 오류 진단 기록. 저장 폴더가 이미 존재할 때 기록 |
 
 물리 반복 횟수를 직접 지정하려면 `engine.json`에 다음과 같이 작성합니다.
@@ -168,27 +177,31 @@ Rapier 판은 사용하는 CPU에 맞는 빌드(AVX-512 → AVX2 → 기본)를 
 
 네이티브 물리 작업 스레드 수는 자동으로 결정됩니다. 필요하면 게임 실행 환경의 `DX_PHYS_THREADS` 환경 변수로 지정할 수 있으며, `0`은 작업 스레드를 끕니다.
 
-### DXVK (선택)
+### 그래픽 (DXVK)
 
-[DXVK](https://github.com/doitsujin/dxvk)는 Direct3D 9 호출을 Vulkan으로 바꿔 주는 `d3d9.dll`입니다. 켜면 모드가 게임을 시작할 때 모드 폴더의 `dxvk\d3d9.dll`을 먼저 불러, 게임의 그래픽이 시스템 Direct3D 9 대신 DXVK로 돕니다. 게임 폴더에는 아무것도 넣지 않습니다. Vulkan을 지원하는 그래픽 드라이버가 필요합니다.
+[DXVK](https://github.com/doitsujin/dxvk)는 Direct3D 9 호출을 Vulkan으로 바꿔 주는 `d3d9.dll`입니다. 모드는 기본으로 게임을 시작할 때 모드 폴더의 `dxvk\d3d9.dll`을 먼저 불러, 게임의 그래픽이 시스템 Direct3D 9 대신 DXVK로 돕니다. 게임 폴더에는 아무것도 넣지 않습니다. Vulkan을 지원하는 그래픽 드라이버가 필요합니다.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Dxvk on    # 끄기: -Dxvk off
-```
-
-설치 스크립트가 DXVK 공식 릴리스(3.1.1, zlib 라이선스)를 한 번 받아 SHA-256을 확인하고, 64비트 `d3d9.dll`만 `Mods\TABPerf\dxvk`에 넣은 뒤 `engine.json`에 `"dxvk": true`를 씁니다. 적용 여부는 `billions.log`의 `dxvk:` 줄에서 확인합니다.
+`engine.json`의 `renderer`로 고릅니다. 게임을 다시 시작해야 적용됩니다.
 
 ```json
 {
-  "dxvk": true,
+  "renderer": "dxvk",
   "dxvkMaxFps": 32
 }
 ```
 
+| `renderer` | 그래픽 |
+| --- | --- |
+| `dxvk` (기본) | DXVK. 모드 폴더에 `dxvk\d3d9.dll`이 없으면 시스템 Direct3D 9 |
+| `d3d9` | 시스템 Direct3D 9(원작과 같음) |
+
+설치 스크립트와 릴리스 파일에는 DXVK 공식 릴리스(3.1.1, zlib 라이선스)의 64비트 `d3d9.dll`이 들어 있습니다(SHA-256 확인). 적용 여부는 `billions.log`의 `dxvk:` 줄에서 확인합니다. 예전의 `"dxvk": true/false` 설정은 더 읽지 않고, 설치 스크립트가 지웁니다.
+
 - 좀비가 많을 때(6만 마리 이상) 프레임이 4~7% 짧아집니다. 게임 진행 속도와 전체 CPU 사용량은 거의 그대로입니다([측정](docs/DEVELOPMENT.md#dxvk)).
 - 좀비가 적을 때는 프레임 수가 늘어(약 32 → 47 FPS) CPU를 더 씁니다. `dxvkMaxFps`로 DXVK의 프레임 제한을 걸 수 있습니다(기본 0, 제한 없음).
 - 처음 보는 셰이더를 컴파일할 때 프레임이 한 번씩 길어질 수 있습니다.
-- 기본은 꺼짐입니다. 다른 DXVK나 오버레이가 `d3d9.dll`을 먼저 불러 둔 경우에는 적용하지 않고 로그에 남깁니다.
+- 다른 DXVK나 오버레이가 `d3d9.dll`을 먼저 불러 둔 경우에는 적용하지 않고 로그에 남깁니다.
+- Direct3D 9를 Direct3D 12로 바꿔 주는 Windows의 D3D9On12도 시험했지만, 큰 창(약 800×600 이상)에서 화면에 그림이 나오지 않아(원격 데스크톱에서 확인) 넣지 않았습니다.
 
 ## 성능 측정
 
@@ -319,8 +332,10 @@ scripts/
 ├─ install.ps1          빌드한 모드와 물리 엔진을 Mods\TABPerf에 설치·제거
 ├─ bench.ps1            원작·최초 배포본·현재 모드의 게임 안 자동 성능 시험 (bench-out/)
 ├─ charts.py            성능 시험 결과 그래프 (docs/charts/)
+├─ package.ps1          배포용 압축 파일 dist/TABPerf-v<버전>.zip (GitHub Actions도 씀)
 └─ lib/
    ├─ game.ps1          게임 폴더 찾기, 모드로더 패치 확인, 파일 해시
+   ├─ dxvk.ps1          DXVK 릴리스 받기(SHA-256 확인)
    └─ toolchain.ps1     MSVC·csc 찾기, 빌드 명령 실행, 패딩 검사
 README-SOURCE.txt      원본 소스 설명 및 구현 상세
 LICENSE.txt            패치 코드의 MIT 라이선스

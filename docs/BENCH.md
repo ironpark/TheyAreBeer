@@ -56,7 +56,7 @@
 
 - `scripts\build.ps1 -Target mod,bench`와 시험할 엔진(`chipmunk`, `rapier`)을 빌드하고, `scripts\install.ps1`로 설치합니다.
 - 최초 배포본을 시험하려면 `refs\`의 참조 파일(`scripts\setup.ps1`)과 MSVC가 있어야 합니다.
-- `-Dxvk`를 쓰려면 `scripts\install.ps1 -Dxvk on`을 한 번 실행해 DXVK를 받아 둡니다. 모드 폴더에 없으면 시험하는 동안만 넣습니다.
+- `-Dxvk`에 쓸 DXVK는 `scripts\install.ps1`이 받아 둡니다. 모드 폴더에 없으면 시험하는 동안만 넣습니다.
 - Steam이 켜져 있어야 합니다.
 - 게임이 꺼져 있어야 합니다.
 
@@ -76,7 +76,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bench.ps1 -Dxvk
 | 인자 | 기본값 | 뜻 |
 | --- | --- | --- |
 | `-Target` | `original,first,chipmunk,rapier` | 시험할 대상(위 표)을 쉼표로 나열 |
-| `-Dxvk` | 끔 | `chipmunk`·`rapier`를 DXVK로 |
+| `-Dxvk` | 끔 | `chipmunk`·`rapier`를 DXVK로(없으면 시스템 Direct3D 9). `-Renderer dxvk|d3d9`로 직접 골라도 됨 |
 | `-Zombies` | `100000` | 이 수가 되면 시험 끝 |
 | `-OriginalZombies` | `50000` | 원작(`original`)은 이 수에서 끝. 좀비가 많으면 원작이 매우 느려지기 때문 |
 | `-Timeout` | `3600` | 레벨 시작부터 이 시간(초)이 지나면 좀비 수와 상관없이 끝 |
@@ -310,7 +310,8 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `TABPERF_TICKPROF` | `1`이면 로직 틱 안의 시스템·컴포넌트 갱신을 메서드별로 재어 20초마다와 진단 기록 끝에 로그에 `tickprof` 줄로 남김. `full`이면 엔티티의 `OnUpdate` 재정의, `CMovable` 단계, 행동 트리 잎 노드도 잼(틱이 약 25% 길어짐) |
 | `TABPERF_POSTPROF` | `1`이면 물리 대기 작업을 메서드별로 재어, 진단 기록이 끝날 때 로그에 `postprof:` 줄로 남김 |
 | `TABPERF_SWARMFAST`, `TABPERF_DEVICECHECK`, `TABPERF_FASTREMOVE`, `TABPERF_FASTDRAW` | `0`이면 웨이브 미니맵 표시·D3D 장치 확인·루트 목록 지우기·단순 스프라이트 손질을 끔|
-| `TABPERF_DXVK`, `TABPERF_DXVK_FPS` | `engine.json`의 `dxvk`·`dxvkMaxFps`와 같음. `1`이면 모드 폴더의 `dxvk\d3d9.dll`(DXVK)을 씀, 그때 `engine` 열과 로그에 `+ DXVK`가 붙음 |
+| `TABPERF_RENDERER`, `TABPERF_DXVK_FPS` | `engine.json`의 `renderer`·`dxvkMaxFps`와 같음. `dxvk`면 모드 폴더의 `dxvk\d3d9.dll`(DXVK)을 씀, 그때 진단 기록의 `engine` 열과 로그에 `+ DXVK`가 붙음 |
+| `TABPERF_RENDERDUMP` | `1`이면 게임 렌더러(`DXRender_SlimDX`) 어셈블리의 형식·메서드 IL 크기와 쓰는 SlimDX 멤버를 `%APPDATA%\TABPerf\renderdump.txt`에 남김 |
 | `TABPERF_SWARMCHECK`, `TABPERF_FASTDRAW_CHECK` | `1`이면 웨이브 표시·단순 스프라이트를 원작과 함께 계산해 차이를 로그에 남김(`swarm check:`, `fast draw check:`). 느려지므로 시간 비교에는 쓰지 말 것 |
 
 각 설정의 배경과 측정 결과는 [DEVELOPMENT.md](DEVELOPMENT.md)를 보세요.

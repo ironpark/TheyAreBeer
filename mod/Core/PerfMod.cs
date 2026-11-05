@@ -11,7 +11,7 @@ namespace Billions
 
     public class PerfMod : IModEntry
     {
-        public const string Version = "0.0.1";
+        public const string Version = ModBuildInfo.Version;   // "Version" of mod\ModInfos.json (scripts\build.ps1)
         const string LoadedKey = "tabperf.optimization.loaded";
         static bool _installed;
 

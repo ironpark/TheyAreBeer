@@ -11,6 +11,7 @@
   "Priority": 0,
   "Enabled": true,
   "RequiredModLoaderVersion": "1.1.0",
-  "AllowAutoUpdate": false,
+  "RepositoryUrl": "https://github.com/ironpark/TheyAreBeer",
+  "AllowAutoUpdate": true,
   "ShowInCustomLevels": false
 }

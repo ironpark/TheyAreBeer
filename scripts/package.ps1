@@ -1,4 +1,5 @@
-# Package the built mod for release: dist\TABPerf-v<version>.zip (version from mod\ModInfos.json).
+# Package the built mod for release: dist\TABPerf-v<version>.zip (version from mod\ModInfos.json) and dist\ModPackage.zip
+# (the same files without the TABPerf\ folder, the release asset TABModLoader's auto-update installs).
 #   powershell -ExecutionPolicy Bypass -File scripts\package.ps1 [-OutDir dist]
 # Needs everything built (scripts\build.ps1: chipmunk, rapier with its three builds, mod). The zip holds one folder,
 # TABPerf\, laid out like scripts\install.ps1 installs it (extract it into <game>\Mods):
@@ -46,18 +47,24 @@ $readme = (Get-Content (Join-Path $PSScriptRoot 'package-readme.txt') -Raw -Enco
 [IO.File]::WriteAllText((Join-Path $root 'README.txt'), ($readme -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $true))
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
-$zip = Join-Path $OutDir "TABPerf-v$version.zip"
-if (Test-Path $zip) { Remove-Item $zip }
 # entry names with '/' separators, given explicitly (Compress-Archive and ZipFile.CreateFromDirectory in Windows
 # PowerShell 5.1 write '\', which other unzip tools take as part of the file name)
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-$archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
-try {
-  foreach ($f in Get-ChildItem $stage -Recurse -File) {
-    $name = $f.FullName.Substring($stage.Length).TrimStart('\').Replace('\', '/')
-    [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $f.FullName, $name, [IO.Compression.CompressionLevel]::Optimal)
+function Write-Zip([string]$zip, [string]$dir) {
+  if (Test-Path $zip) { Remove-Item $zip }
+  $archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
+  try {
+    foreach ($f in Get-ChildItem $dir -Recurse -File) {
+      $name = $f.FullName.Substring($dir.Length).TrimStart('\').Replace('\', '/')
+      [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $f.FullName, $name, [IO.Compression.CompressionLevel]::Optimal)
+    }
   }
+  finally { $archive.Dispose() }
+  Write-Host "OK: $zip ($([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB)"
 }
-finally { $archive.Dispose() }
+# TABPerf-v<version>.zip: the TABPerf\ folder, extracted by hand into <game>\Mods
+Write-Zip (Join-Path $OutDir "TABPerf-v$version.zip") $stage
+# ModPackage.zip: the folder's contents at the root - TABModLoader's auto-update (ModInfos.json "RepositoryUrl",
+# "AllowAutoUpdate") downloads this release asset, empties the mod folder and extracts it there
+Write-Zip (Join-Path $OutDir 'ModPackage.zip') $root
 Remove-Item $stage -Recurse -Force
-Write-Host "OK: $zip ($([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB)"

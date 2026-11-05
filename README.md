@@ -52,6 +52,8 @@ They Are Billions 최적화 패치
 
 [Releases](https://github.com/ironpark/TheyAreBeer/releases)에서 `TABPerf-v<버전>.zip`을 받아, 압축 파일 안의 `TABPerf` 폴더를 `<게임 설치 폴더>\Mods\`에 그대로 넣습니다(`Mods\TABPerf\TABPerf.dll`이 되도록). 물리 엔진 두 가지와 DXVK, 라이선스 문서가 함께 들어 있습니다. 릴리스 파일은 GitHub Actions가 저장소의 소스로 빌드합니다(`.github/workflows/build.yml`).
 
+모드는 TABModLoader의 자동 업데이트를 씁니다(`ModInfos.json`의 `RepositoryUrl`, `"AllowAutoUpdate": true`). 게임을 시작할 때 모드로더가 하루에 한 번 이 저장소의 최신 릴리스를 확인하고, 태그 버전이 설치된 모드의 `Version`보다 높으면 릴리스의 `ModPackage.zip`을 받아 모드 폴더를 새로 채웁니다. 설정과 로그는 `%APPDATA%\TABPerf`에 있어 그대로 남습니다. 끄려면 `Mods\TABPerf\ModInfos.json`의 `AllowAutoUpdate`를 `false`로 바꿉니다(업데이트 뒤에도 이 값은 유지됩니다).
+
 ### 소스에서 빌드해 설치
 
 먼저 [빌드 문서](docs/BUILD.md)대로 모드와 물리 엔진을 빌드합니다. 빌드 문서에는 게임 확인·참조 파일·모드로더 패치를 하는 세팅 스크립트도 있습니다.

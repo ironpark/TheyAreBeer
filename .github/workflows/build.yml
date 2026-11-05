@@ -1,6 +1,6 @@
 # Builds everything (Chipmunk and Rapier physics DLLs, the engine mod, the bench mod) on Windows and packages the mod
-# (scripts\package.ps1). A pushed tag v<version> also publishes a GitHub release with the package; the tag must match
-# "Version" in mod/ModInfos.json.
+# (scripts\package.ps1). A pushed tag v<version> sets that version (scripts\set-version.ps1) and publishes a GitHub
+# release with both packages; ModPackage.zip is the asset TABModLoader's auto-update installs.
 name: build
 
 on:
@@ -35,14 +35,23 @@ jobs:
       - name: Build references (TABModLoader)
         run: .\scripts\setup.ps1 -NoPatch
 
-      - name: Build
-        run: .\scripts\build.ps1 -Target chipmunk,harness,rapier,mod,bench
-
-      - name: Check the version
+      - name: Version from the tag
         if: startsWith(github.ref, 'refs/tags/v')
+        run: .\scripts\set-version.ps1 -Version $env:GITHUB_REF_NAME
+
+      - name: Build
         run: |
-          $v = (Get-Content mod\ModInfos.json -Raw | ConvertFrom-Json).Version
-          if ("v$v" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME does not match mod/ModInfos.json Version $v" }
+          try { .\scripts\build.ps1 -Target chipmunk,harness,rapier,mod,bench }
+          catch { Write-Host "::error title=build.ps1::$($_.Exception.Message) ($($_.InvocationInfo.PositionMessage -replace '\r?\n', '%0A'))"; throw }
+
+      # on failure, the end of each build log as an annotation (shown on the run page)
+      - name: Build logs
+        if: failure()
+        run: |
+          foreach ($f in Get-ChildItem native\out, mod\out, bench\out -Filter *.log -ErrorAction SilentlyContinue) {
+            $tail = (Get-Content $f.FullName -Tail 25 | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=$($f.Name)::$tail"
+          }
 
       - name: Package
         run: .\scripts\package.ps1
@@ -50,7 +59,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: TABPerf
-          path: dist/*.zip
+          path: |
+            dist/TABPerf-*.zip
+            dist/ModPackage.zip
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -58,5 +69,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $zip = "dist\TABPerf-$env:GITHUB_REF_NAME.zip"
-          gh release create $env:GITHUB_REF_NAME $zip --title "TABPerf $env:GITHUB_REF_NAME" --notes-file .github\release-notes.md
+          gh release create $env:GITHUB_REF_NAME $zip dist\ModPackage.zip --title "TABPerf $env:GITHUB_REF_NAME" --notes-file .github\release-notes.md
           if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }

@@ -124,6 +124,7 @@ namespace Billions
                     }, 200, 0);
                     PostLoopTicks += System.Diagnostics.Stopwatch.GetTimestamp() - p0;
                     FarField.AfterStep();
+                    BodyHandles.FreeQueued();
                 }
                 DXPhysicWorld.NUpdates += 1U;
                 DXPhysicWorld.Iteration += 1U;

@@ -33,10 +33,28 @@ namespace Billions
         static long _minAt, _slowLogAt;
         public static int Installed;
 
+        static readonly AccessTools.FieldRef<CEnergyTransferer, bool> _energyEnabled =
+            AccessTools.Field(typeof(CEnergyTransferer), "_EnergyEnabled") != null ? AccessTools.FieldRefAccess<CEnergyTransferer, bool>("_EnergyEnabled") : null;
+
+        public static void SetEnabled(bool on)
+        {
+            if (on == Enabled) return;
+            Enabled = on; Interlocked.Increment(ref _ver);
+            Log.Info("energy fix: " + (on ? "켬" : "끔") + (Installed == 1 ? "" : " (설치되지 않아 효과 없음)"));
+        }
+
         public static void Install(Harmony h)
         {
             try
             {
+                // TABModLoader v1.1.7 computes the power grid with a flood fill from the command centers
+                // (SysMiniMapUpdater.RebuildEnergyMap) and no longer asks the energy path finder whether a building is
+                // connected, so there is nothing left to speed up here
+                if (AccessTools.Method(typeof(SysMiniMapUpdater), "RebuildEnergyMap") != null)
+                {
+                    Log.Info("전력 연결 번호표: 모드로더가 전력망을 직접 채워 계산한다(SysMiniMapUpdater.RebuildEnergyMap) — 설치하지 않음");
+                    return;
+                }
                 _grid = AccessTools.FieldRefAccess<PathFinderFast, uint[,]>("mGrid");
                 var fp = AccessTools.Method(typeof(PathFinderFast), "FindPath", new[] { typeof(Point), typeof(Point), typeof(uint) });
                 var ue = AccessTools.Method(typeof(SysMiniMapUpdater), "UpdateEntityEnergy");
@@ -164,7 +182,7 @@ namespace Billions
         public static Dictionary<string, object> Diag(Dictionary<string, object> req)
         {
             object on;
-            if (req != null && req.TryGetValue("on", out on) && on is bool && (bool)on != Enabled) { Enabled = (bool)on; Interlocked.Increment(ref _ver); Log.Info("energy fix: " + (Enabled ? "on" : "off") + " (player)"); }
+            if (req != null && req.TryGetValue("on", out on) && on is bool) SetEnabled((bool)on);
             int total = 0, enabled = 0, connected = 0, painting = 0;
             var towers = new List<object>();
             try
@@ -174,8 +192,9 @@ namespace Billions
                     total++;
                     var e = c.Entity as ZX.Entities.ZXEntity; var b = c.Entity as Building;
                     bool en = e != null && e.Enabled, co = b == null || b.ConnectedToEnergy;
-                    if (en) enabled++; if (co) connected++; if (c._EnergyEnabled) painting++;
-                    if (towers.Count < 400 && e != null) towers.Add(new Dictionary<string, object> { { "x", e.Cell.X }, { "y", e.Cell.Y }, { "r", e.get_Params() != null ? e.get_Params().EnergyTransferRadius : 0 }, { "on", en }, { "link", co }, { "paint", c._EnergyEnabled }, { "cc", e is CommandCenter } });
+                    bool paint = _energyEnabled != null && _energyEnabled(c);   // the field is gone from TABModLoader v1.1.7
+                    if (en) enabled++; if (co) connected++; if (paint) painting++;
+                    if (towers.Count < 400 && e != null) towers.Add(new Dictionary<string, object> { { "x", e.Cell.X }, { "y", e.Cell.Y }, { "r", e.get_Params() != null ? e.get_Params().EnergyTransferRadius : 0 }, { "on", en }, { "link", co }, { "paint", paint }, { "cc", e is CommandCenter } });
                 }
             }
             catch (Exception ex) { Log.Error("energy diag", ex); }

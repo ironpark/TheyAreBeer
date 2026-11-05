@@ -59,11 +59,20 @@ namespace Billions
             catch (Exception e) { Installed = 0; Log.Error("options install", e); }
         }
 
-        // one engine.json choice shown as a combo box
+        // one engine.json setting on the page: a combo box (Values) or a check box (true/false); OnApply runs when Apply
+        // saves a changed value (settings the mod can change while the game runs)
         sealed class Choice
         {
-            public string Key; public bool Reboot; public object[] Values; public object Initial; public ZXComboBox Box;
-            public object Selected { get { int i = Box.SelectedIndex; return i >= 0 && i < Values.Length ? Values[i] : Initial; } }
+            public string Key; public bool Reboot; public object[] Values; public object Initial; public ZXComboBox Box; public ZXCheckBox Check;
+            public Action<object> OnApply;
+            public object Selected
+            {
+                get
+                {
+                    if (Check != null) return Check.Checked;
+                    int i = Box.SelectedIndex; return i >= 0 && i < Values.Length ? Values[i] : Initial;
+                }
+            }
         }
 
         static void AfterShow()
@@ -117,6 +126,13 @@ namespace Billions
                 choices.Add(c);
                 return c;
             };
+            Func<string, bool, Action<object>, Choice> check = (key, current, onApply) =>
+            {
+                var c = new Choice { Key = key, Initial = current, Check = new ZXCheckBox(), OnApply = onApply };
+                c.Check.Size = size; c.Check.Checked = current;
+                choices.Add(c);
+                return c;
+            };
             string restart = Text(" 게임을 다시 시작하면 적용됩니다.", " Applies after a restart.");
             string nextLevel = Text(" 다음에 게임(맵)을 불러올 때 적용됩니다.", " Applies the next time a game (map) is loaded.");
 
@@ -127,6 +143,12 @@ namespace Billions
             row(Text("물리 엔진", "Physics engine"), Text(
                 "좀비와 건물의 충돌을 계산하는 엔진입니다. Chipmunk2D 다중 코어가 기본이고, Rapier 2D는 좀비가 아주 많을 때 더 빠릅니다. 원작 엔진은 이 모드의 물리 최적화를 끕니다.",
                 "The engine that computes collisions. Chipmunk2D multi-core is the default; Rapier 2D is faster with very large hordes. Original turns this mod's physics changes off.") + restart, engine.Box);
+            var threads = combo("physicsThreads", false, (object)Features.PhysicsThreads,
+                new object[] { 0, 1, 2, 4, 6, 8, 12, 16 }, new[] { Text("자동(기본)", "Auto (default)"), Text("1 (다중 코어 끔)", "1 (no multi-core)"), "2", "4", "6", "8", "12", "16" });
+            threads.OnApply = v => Features.SetPhysicsThreads((int)v);
+            row(Text("최대 물리 스레드", "Max physics threads"), Text(
+                "물리 계산에 쓰는 스레드 수(계산을 이끄는 스레드 포함)입니다. 자동은 물리 코어 수만큼(최대 17)입니다. 다른 프로그램과 CPU를 나눠 쓰거나 발열을 줄이려면 낮춥니다. Chipmunk2D 다중 코어와 Rapier 2D에 적용되고, 원작 엔진은 늘 1개입니다.",
+                "Threads the physics uses, the stepping thread included. Auto = one per physical core (at most 17). Lower it to leave CPU for other programs or to run cooler. Applies to Chipmunk2D multi-core and Rapier 2D; the original engine always uses one.") + nextLevel, threads.Box);
 
             title(Text("그래픽", "Graphics"));
             var renderer = combo("renderer", true, MiniJson.Str(cfg, "renderer", "dxvk").Trim().ToLowerInvariant(),
@@ -143,11 +165,27 @@ namespace Billions
                 "좀비 체력바를 테두리 없는 얇은 막대 하나로 그려 좀비가 많을 때 화면이 덜 느려집니다. 끄면 원작 체력바 그대로입니다. 적용을 누르면 바로 바뀝니다.",
                 "Draws zombie health bars as a single thin bar so large hordes render faster. Off = original health bars. Applies right away."), light);
 
+            title(Text("개별 최적화", "Individual optimizations"));
+            string rightAway = Text(" 적용을 누르면 바로 바뀝니다.", " Applies right away.");
+            var zsort = check("drawOrderSort", Features.Switch("drawOrderSort"), v => Features.SetSwitch("drawOrderSort", (bool)v));
+            row(Text("그리기 순서 최적화", "Draw order optimization"), Text(
+                "좀비가 많아 물체의 앞뒤 순서가 한 프레임에 아주 많이 바뀌면, 바뀔 때마다 하나씩 다시 끼워 넣는 대신 한꺼번에 정렬합니다(정렬이 오래 걸리면 몇 프레임에 한 번). 끄면 원작처럼 바뀔 때마다 바로 순서를 맞춥니다.",
+                "When very many objects change their front-to-back order in one frame (large hordes), sorts them all at once instead of re-inserting each change (every few frames when the sort is slow). Off = keep the order on every change like the original.") + rightAway, zsort.Check);
+            var energy = check("energyFix", Features.Switch("energyFix"), v => Features.SetSwitch("energyFix", (bool)v));
+            row(Text("전력망 최적화", "Power grid optimization"), Text(
+                "건물이 전력망에 이어졌는지를 길 찾기 대신 이어진 구역 번호로 바로 답합니다. 가끔 원작 길 찾기와 맞춰 보고, 다르면 스스로 꺼집니다. 끄면 원작 길 찾기 그대로입니다.",
+                "Answers whether a building is connected to the power grid from connected-area labels instead of path finding. It checks itself against the original now and then and turns itself off on a mismatch. Off = the original path finding.") + rightAway
+                + (EnergyFix.Installed == 1 ? "" : Text(" (이 게임/모드로더에서는 설치되지 않아 효과가 없습니다.)", " (Not installed with this game / mod loader, so it has no effect.)")), energy.Check);
+            var search = check("zombieSearchSkip", Features.Switch("zombieSearchSkip"), v => Features.SetSwitch("zombieSearchSkip", (bool)v));
+            row(Text("좀비 탐색 최적화", "Zombie search optimization"), Text(
+                "공격할 대상(건물·유닛)이 탐색 거리보다 넉넉히 먼 곳의 좀비는 적 찾기를 건너뜁니다. 대상까지의 거리 지도로 판단하고 여유를 두어, 찾았어도 아무것도 없었을 경우만 건너뜁니다. 끄면 모든 좀비가 원작처럼 매번 적을 찾습니다.",
+                "Zombies well beyond search range of any target (buildings, units) skip their enemy search. A distance map to the targets, with a margin, decides, so only searches that would have found nothing are skipped. Off = every zombie searches every time like the original.") + rightAway, search.Check);
+
             title(Text("게임 시간", "Game time"));
-            var fast = new ZXCheckBox(); fast.Size = size; bool fastInit = MiniJson.Bool(cfg, "fastTiming", true); fast.Checked = fastInit;
+            var fast = check("fastTiming", MiniJson.Bool(cfg, "fastTiming", true), null);
             row(Text("빠른 타이머 루프", "Fast timing loop"), Text(
                 "그래픽 탭의 FastTimming이 꺼져 있어도 게임 시간을 실제 경과 시간으로 진행해, 물리 계산이 길어질 때 게임이 느려지지 않게 합니다. 끄면 게임 옵션을 그대로 따릅니다.",
-                "Advances game time by the real elapsed time even with the Graphics tab's FastTimming off, so long physics updates don't slow the game down. Off = follow the game option.") + nextLevel, fast);
+                "Advances game time by the real elapsed time even with the Graphics tab's FastTimming off, so long physics updates don't slow the game down. Off = follow the game option.") + nextLevel, fast.Check);
             var lag = combo("logicMaxLag", false, (object)MiniJson.Int(cfg, "logicMaxLag", 3),
                 new object[] { 1, 2, 3, 4, 5, 6 }, new[] { Text("1 (원작)", "1 (original)"), "2", Text("3 (기본)", "3 (default)"), "4", "5", "6" });
             row(Text("로직 따라잡기", "Logic catch-up"), Text(
@@ -166,8 +204,12 @@ namespace Billions
                         Log.Info("options: 좀비 체력바 가볍게 = " + LightLifeBars);
                     }
                     var changed = new Dictionary<string, object>();
-                    foreach (var c in choices) if (!Equals(c.Selected, c.Initial)) changed[c.Key] = c.Selected;
-                    if (fast.Checked != fastInit) changed["fastTiming"] = fast.Checked;
+                    foreach (var c in choices)
+                    {
+                        if (Equals(c.Selected, c.Initial)) continue;
+                        changed[c.Key] = c.Selected;
+                        if (c.OnApply != null) try { c.OnApply(c.Selected); } catch (Exception e) { Log.Error("options " + c.Key, e); }
+                    }
                     if (changed.Count == 0) return;
                     var now = Settings.Config() ?? new Dictionary<string, object>();   // keep the other keys as they are in the file
                     foreach (var kv in changed) now[kv.Key] = kv.Value;
@@ -175,7 +217,7 @@ namespace Billions
                     var sb = new StringBuilder();
                     foreach (var kv in changed) sb.Append(sb.Length > 0 ? ", " : "").Append(kv.Key).Append(" = ").Append(MiniJson.Serialize(kv.Value));
                     Log.Info("options: engine.json 저장 — " + sb);
-                    foreach (var env in new[] { "TABPERF_ENGINE", "TABPERF_RENDERER", "TABPERF_DXVK_FPS", "TABPERF_FASTTIMING", "TABPERF_LOGIC_LAG" })
+                    foreach (var env in new[] { "TABPERF_ENGINE", "TABPERF_RENDERER", "TABPERF_DXVK_FPS", "TABPERF_FASTTIMING", "TABPERF_LOGIC_LAG", "TABPERF_PHYS_THREADS", "TABPERF_ZSORT", "TABPERF_ENERGYFIX", "TABPERF_ZOMBIESEARCH" })
                         if (Settings.Env(env) != null) Log.Info("options: 환경 변수 " + env + " 가 engine.json 보다 앞선다");
                 }
                 catch (Exception e) { Log.Error("options save", e); }

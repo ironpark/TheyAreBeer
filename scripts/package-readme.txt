@@ -2,7 +2,7 @@ TAB 최적화 패치 (TABPerf) v{version}
 https://github.com/ironpark/TheyAreBeer
 
 설치
-1. They Are Billions에 TABModLoader v1.1.6을 설치합니다(v1.1.7은 아직 지원하지 않음). https://codeberg.org/JKstring/TABModLoader
+1. They Are Billions에 TABModLoader v1.1.7(또는 v1.1.6)을 설치합니다. https://codeberg.org/JKstring/TABModLoader
 2. 이 압축 파일의 TABPerf 폴더를 <게임 설치 폴더>\Mods\ 안에 그대로 넣습니다.
    (<게임 설치 폴더>\Mods\TABPerf\TABPerf.dll 이 되어야 합니다.)
 3. 게임을 실행합니다. 적용 기록은 %APPDATA%\TABPerf\billions.log 에 남습니다.

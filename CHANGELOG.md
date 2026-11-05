@@ -4,9 +4,33 @@
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-11-05
+
+v0.0.1 태그의 릴리스 빌드가 CI에서 실패해(아래 「CI」) 릴리스 파일이 나오지 않았으므로, 이 버전이 첫 릴리스 파일입니다. 0.0.1의 변경도 모두 담습니다.
+
+### TABModLoader v1.1.7
+
+- v1.1.7에서도 돕니다(v1.1.6도 그대로). 실제 게임에서 Chipmunk·Rapier 판 모두 좀비 6만 마리까지 제 속도, 모드·게임 로그에 오류가 없음을 확인했습니다.
+- 전력망: v1.1.7은 전력망을 사령부에서부터 채워 계산하고(`SysMiniMapUpdater.RebuildEnergyMap`) 연결 길 찾기를 더 하지 않으므로, 모드의 전력망 최적화는 이를 알아보고 설치하지 않습니다. 진단에서 읽던 `CEnergyTransferer._EnergyEnabled`가 없어진 것도 처리했습니다.
+- 몸체 핸들: v1.1.7은 물리 몸체를 지울 때 물리 DLL에 넘긴 사용자 데이터 핸들(GCHandle)을 바로 풉니다. 로직 스레드의 위치 질의가 그 직전에 읽은 포인터를 쓰면 풀린 핸들에 닿을 수 있어, 모드가 핸들을 다음 물리 갱신의 로직 잠금 구간에서 풉니다(`mod/Physics/BodyHandles.cs`).
+- 좀비 체력바 가볍게: v1.1.7은 체력바가 최소 폭보다 좁으면 매 프레임 폭을 다시 정하고 다시 만들어, 모드의 작은 막대가 매 프레임 다시 만들어졌습니다. 이제 최소 폭 밑으로 줄이지 않습니다.
+- Rapier 판 `Space_IsLocked`가 물리 단계(충돌 콜백 포함) 동안 1을 돌려줘, v1.1.7이 콜백 안에서 지우려는 몸체를 단계 뒤로 미룹니다.
+- 물리 대기 작업 계측(`TABPERF_POSTPROF`)이 v1.1.7처럼 빈 작업을 건너뛰고 작업별로 오류를 잡습니다.
+
+### 최적화 탭 추가 설정
+
+- **최대 물리 스레드**(자동·1~16, `physicsThreads`, 다음 게임(맵)부터)와 **그리기 순서·전력망·좀비 탐색 최적화** 개별 켜기/끄기(`drawOrderSort`, `energyFix`, `zombieSearchSkip`, 기본 켬, 적용 즉시)를 더했습니다. 시작할 때 `mod/Core/Features.cs`가 `engine.json`에서 읽어 적용합니다.
+
+### CI
+
+- 태그(`v*`)와 손으로 실행할 때만 돕니다. `main` 푸시는 Rapier 빌드 입력(`native/rapier/`, `scripts/build.ps1`)이 바뀔 때만 돌아 태그 실행이 쓸 캐시를 만듭니다. 문서만 바꾼 푸시에는 돌지 않습니다.
+- Rapier의 CPU 수준별 세 빌드를 동시에 돌리고, 빌드 입력(Rapier 커밋, Rust 버전, CMake 옵션, 패치)이 같으면 다시 빌드하지 않습니다(`native\out\rapier-sdk*\tabperf-build.txt`). CI는 이 결과와 Cargo 크레이트, TABModLoader 참조 파일, DXVK를 캐시합니다.
+- Rapier를 명시적인 Rust 대상(`RAPIER_TARGET`)으로 빌드해, CPU 수준 플래그가 라이브러리에만 붙습니다. 전에는 빌드 기계에서 도는 빌드 스크립트에도 AVX-512가 붙어, AVX-512가 없는 CI 기계에서 `STATUS_ILLEGAL_INSTRUCTION`으로 실패했습니다(v0.0.1 태그 빌드가 실패한 원인).
+- Rapier 저장소에 없는 `Cargo.lock`을 동시 빌드 전에 한 번 만듭니다(`cargo fetch`). 빌드 로그가 명령 전체의 출력을 담고, 실패하면 각 로그 끝을 주석(annotation)으로 남깁니다.
+
 ## [0.0.1] - 2026-11-05
 
-첫 릴리스입니다. 최초 배포본(`ef035e1`) 이후의 변경을 모두 담습니다.
+태그만 있고 릴리스 파일은 없습니다(릴리스 빌드 실패, 0.0.2 참고). 최초 배포본(`ef035e1`) 이후의 변경을 모두 담습니다.
 
 ### 자동 업데이트와 버전
 
@@ -80,7 +104,7 @@
 - 공용 함수를 `scripts\lib\`로 나눴습니다. `game.ps1`은 게임 폴더 찾기·모드로더 패치 확인·해시, `toolchain.ps1`은 MSVC·csc 찾기·빌드 명령 실행·패딩 검사를 맡습니다. `setup.ps1`과 `install.ps1`의 중복 함수(해시, 로더 확인, 게임 폴더 확인)도 여기로 옮겼습니다.
 - 빌드 명령 실행(`Invoke-Cmd`)을 한 곳에서 처리합니다. 전에는 스크립트마다 오류 처리 방식(`$ErrorActionPreference` 복원 여부)이 달랐습니다.
 - Rapier CMake 옵션을 한 표에서 만들어, CMake 인자와 빌드 뒤 캐시 확인이 같은 값을 씁니다.
-- `setup.ps1`은 기본으로 모드가 맞춰진 TABModLoader v1.1.6을 받습니다(`-Version latest`면 최신). 참조 라이브러리는 릴리스 버전 이하의 `Lib*` 폴더 중 그 파일이 있는 가장 새 폴더에서 받습니다. v1.1.7의 `Lib`에는 `DXVision.dll`만 있어 `0Harmony.dll`을 찾지 못하고 실패했습니다.
+- `setup.ps1`은 기본으로 모드가 맞춰진 TABModLoader v1.1.7을 받습니다(`-Version latest`면 최신, `-Version v1.1.6`도 됨). 참조 라이브러리는 릴리스 버전 이하의 `Lib*` 폴더 중 그 파일이 있는 가장 새 폴더에서 받습니다. v1.1.7의 `Lib`에는 `DXVision.dll`만 있어 `0Harmony.dll`을 찾지 못하고 실패했습니다.
 
 #### 추가
 - `scripts\bench.ps1`: 게임 안 자동 성능 시험을 엔진별·회차별로 돌리고, 실행별 CSV와 `summary.csv`를 `bench-out\`에 남깁니다. 사용법은 [성능 시험 문서](docs/BENCH.md).

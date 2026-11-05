@@ -1,7 +1,7 @@
 {
   "Id": "tabperf.optimization",
   "Name": "TAB 최적화 패치 (They Are Billions Optimization Patch)",
-  "Version": "0.0.1",
+  "Version": "0.0.2",
   "Author": "ddolddolddol-e",
   "Description": "대량 좀비 장면의 끊김·느려짐을 줄이는 엔진 최적화(규칙·화면은 원작 그대로). 매끈한 게임 시간 · 다중 코어 분할 · 그리기 순서 정렬 · 좀비 적 찾기 건너뛰기 · 전력 연결 계산. 물리 DLL 대체본과 함께 쓰면 가장 빠르다.",
   "IsCampaign": false,

@@ -771,7 +771,11 @@ static void remove_body_record(DxBody *b)
 /* ---------- exports: space ---------- */
 DX_EXPORT DXPointF Sumar(int a, int b) { return dxp((float)a, (float)b); }
 DX_EXPORT void Algo(void) {}
-DX_EXPORT float Space_IsLocked(void *space) { (void)space; return 0.0f; }
+/* Nonzero while Space_Step runs, its callbacks into the game included, like Chipmunk's locked space: TABModLoader v1.1.7's
+   DXPhysicBody.Dispose then defers a disposal asked for from a collision callback until after the step (DisposeAfterStep)
+   instead of freeing a body, and its user-data handle, that a later recorded callback still names. */
+static volatile LONG g_stepping;
+DX_EXPORT float Space_IsLocked(void *space) { (void)space; return g_stepping ? 1.0f : 0.0f; }
 DX_EXPORT void Space_SetCollisionCallback(void *space, DXCollisionCallback func) { (void)space; g_collision = func; }
 DX_EXPORT void Space_SetSeparationCallback(void *space, DXSeparationCallback func) { (void)space; g_separation = func; }
 
@@ -1046,6 +1050,7 @@ DX_EXPORT void Space_Step(void *space, float timeStep)
 	if (space != g_space_token || !g_rw || timeStep == 0.0f) return;
 	if (g_steps < 200 && (InterlockedIncrement(&g_steps) % 20) == 1) dx_check_patches("Space_Step");
 	dx_diag_thread();
+	InterlockedExchange(&g_stepping, 1);
 	AcquireSRWLockExclusive(&g_world);
 	if (timeStep != g_dt)
 	{
@@ -1213,6 +1218,7 @@ DX_EXPORT void Space_Step(void *space, float timeStep)
 		}
 	}
 	for (int i = 0; i < g_nseps; i++) { DxCall *c = &g_seps[i]; if (c->a && c->b && g_separation) g_separation(c->a, c->b); }
+	InterlockedExchange(&g_stepping, 0);
 }
 
 /* ---------- exports: queries ---------- */

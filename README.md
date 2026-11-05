@@ -44,7 +44,7 @@
 
 ## 설치
 
-[TABModLoader](https://codeberg.org/JKstring/TABModLoader) v1.1.6이 설치된 게임에 넣습니다. v1.1.7은 게임의 전력 계산 코드를 바꿔 아직 맞추지 않았습니다.
+[TABModLoader](https://codeberg.org/JKstring/TABModLoader) v1.1.6 또는 v1.1.7이 설치된 게임에 넣습니다. v1.1.7은 전력망 계산을 모드로더가 직접 빠르게 하므로, 그때는 모드의 전력망 최적화가 설치되지 않습니다.
 
 ### 릴리스 파일로 설치
 
@@ -104,11 +104,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Engine chipmunk
 | 최적화 탭 | `engine.json` 키 | 적용 시점 |
 | --- | --- | --- |
 | 물리 엔진: Chipmunk2D 다중 코어(기본) / Rapier 2D / 원작 엔진 | `physicsEngine` | 다시 시작 |
+| 최대 물리 스레드: 자동(기본, 물리 코어 수) / 1 / 2 / 4 / 6 / 8 / 12 / 16 | `physicsThreads` (0 = 자동) | 다음 게임(맵) 불러오기 |
 | 렌더러: DXVK(기본) / Direct3D 9 | `renderer` | 다시 시작 |
 | DXVK 최대 FPS: 제한 없음(기본) / 30 / 60 / 120 / 144 | `dxvkMaxFps` | 다시 시작 |
 | 좀비 체력바 가볍게(기본 꺼짐) | `options.json`의 `lightLifeBars` | 바로 |
 | 빠른 타이머 루프(기본 켜짐) | `fastTiming` | 다음 게임(맵) 불러오기 |
 | 로직 따라잡기: 1(원작) ~ 6, 기본 3 | `logicMaxLag` | 다음 게임(맵) 불러오기 |
+| 그리기 순서 최적화(기본 켬) | `drawOrderSort` | 바로 |
+| 전력망 최적화(기본 켬, TABModLoader v1.1.6에서만 설치) | `energyFix` | 바로 |
+| 좀비 탐색 최적화(기본 켬) | `zombieSearchSkip` | 바로 |
 
 탭은 바뀐 키만 `engine.json`에 쓰고 다른 키는 그대로 둡니다. 같은 이름의 환경 변수(`TABPERF_...`)가 있으면 그쪽이 앞섭니다.
 

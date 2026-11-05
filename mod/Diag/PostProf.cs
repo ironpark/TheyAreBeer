@@ -29,8 +29,9 @@ namespace Billions
             Action a;
             while (q.TryDequeue(out a))
             {
+                if (a == null) continue;   // as the game's ExecuteAll (TABModLoader v1.1.7): skip nulls, one failure does not stop the rest
                 long t0 = Stopwatch.GetTimestamp();
-                a();
+                try { a(); } catch (Exception e) { Log.Error("postprof " + a.Method.Name, e); }
                 long d = Stopwatch.GetTimestamp() - t0;
                 Stat s;
                 if (!_stats.TryGetValue(a.Method, out s)) _stats[a.Method] = s = new Stat();

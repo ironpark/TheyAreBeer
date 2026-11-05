@@ -74,6 +74,7 @@ namespace Billions
             Step("매끈한 게임 시간", () => SmoothTime.Install(h));
             Step("논리/물리 병렬 동적 분할", () => ParallelFix.Install(h));
             Step("물리 보간 기준", () => PhysicsTime.Install(h));
+            Step("몸체 핸들 늦게 풀기", () => BodyHandles.Install(h));
             Step("좀비 적 찾기 건너뛰기", () => FarField.Install(h));
             Step("그리기 순서 상황형 정렬", () => ZSort.Install(h));
             Step("소리 장치 다시 켜기 줄이기", () => SoundIdle.Install(h));
@@ -87,6 +88,7 @@ namespace Billions
             if (Bench.Enabled || TickProf.On) Step("로직 갱신 계측", () => LogicProf.Install(h));
             Step("로직 틱 내부 계측", () => TickProf.Install(h));
             Step("렌더러 조사", RenderDump.Run);
+            Step("최적화 설정", Features.ApplyAtStart);
             Log.Info("설치 끝 — 물리 DLL: " + PhysicsDll());
         }
 

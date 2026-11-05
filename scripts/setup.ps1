@@ -1,5 +1,5 @@
 # Set up a machine for building and running TABPerf, using TABModLoader (https://codeberg.org/JKstring/TABModLoader).
-#   powershell -ExecutionPolicy Bypass -File scripts\setup.ps1 [-GameDir <folder>] [-RefDir <folder>] [-Version v1.1.6|latest] [-NoPatch] [-Force]
+#   powershell -ExecutionPolicy Bypass -File scripts\setup.ps1 [-GameDir <folder>] [-RefDir <folder>] [-Version v1.1.7|latest] [-NoPatch] [-Force]
 # 1. Finds the They Are Billions installation (Steam library folders, or -GameDir).
 # 2. Downloads the build references into <repo>\refs (ignored by git):
 #      TheyAreBillions.exe          - the TABModLoader-patched game executable (ModLoaderUpdate.zip of the release, renamed)
@@ -17,9 +17,9 @@ $repo = Split-Path -Parent $PSScriptRoot
 if (-not $RefDir) { $RefDir = Join-Path $repo 'refs' }
 $api = 'https://codeberg.org/api/v1/repos/JKstring/TABModLoader'
 $exeName = $TabExe
-# the loader release the mod is built and tested against (v1.1.7 rewrote the game's energy code: CEnergyTransferer
-# lost _EnergyEnabled and the mod's power fix targets); -Version latest takes the newest release
-if (-not $Version) { $Version = 'v1.1.6' }
+# the loader release the mod is built and tested against (the mod also runs on v1.1.6); -Version latest takes the
+# newest release
+if (-not $Version) { $Version = 'v1.1.7' }
 
 # ---------- 1. game installation ----------
 if ($GameDir) {

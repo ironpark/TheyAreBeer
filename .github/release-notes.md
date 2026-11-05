@@ -1,7 +1,7 @@
 They Are Billions 최적화 패치(TABPerf). 이 저장소의 소스로 GitHub Actions가 빌드한 모드 압축 파일입니다.
 
 **설치**
-1. 게임에 [TABModLoader](https://codeberg.org/JKstring/TABModLoader)v1.1.6을 설치합니다(v1.1.7은 아직 지원하지 않음).
+1. 게임에 [TABModLoader](https://codeberg.org/JKstring/TABModLoader)v1.1.7(또는 v1.1.6)을 설치합니다.
 2. 압축 파일 안의 `TABPerf` 폴더를 `<게임 설치 폴더>\Mods\`에 그대로 넣습니다(`Mods\TABPerf\TABPerf.dll`이 되도록).
 3. 게임을 실행합니다. 이후 새 릴리스는 TABModLoader가 게임 시작 때 자동으로 받습니다(하루 한 번 확인, `ModInfos.json`의 `AllowAutoUpdate`로 끔). 적용 기록은 `%APPDATA%\TABPerf\billions.log`에 남습니다.
 

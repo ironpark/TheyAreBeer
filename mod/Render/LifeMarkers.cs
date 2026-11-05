@@ -45,6 +45,9 @@ namespace Billions
             catch (Exception e) { Installed = 0; Log.Error("life markers install", e); }
         }
 
+        static readonly AccessTools.FieldRef<OEntityMeter, int> _minVisible =
+            AccessTools.Field(typeof(OEntityMeter), "_MinVisibleWidth") != null ? AccessTools.FieldRefAccess<OEntityMeter, int>("_MinVisibleWidth") : null;
+
         static bool IsZombieMeter(OMeter m) { var em = m as OEntityMeter; return em != null && em._Entity is Zombie; }
 
         static void UpdatePost(OMeter __instance)
@@ -58,7 +61,11 @@ namespace Billions
                 var em = (OEntityMeter)__instance;
                 float zf = em._LastCameraWidth > 0 ? (float)DXMath.Limit(0.2, 30.0 / em._LastCameraWidth, 1.5) : 1f;
                 bool big = em._Entity is ZombieGiant || em._Entity is ZombieMutant;
-                __instance.Width = Math.Max(2f, em._DefaultWidth * zf * (big ? BigWidthFactor : DotWidthFactor));
+                float w = Math.Max(2f, em._DefaultWidth * zf * (big ? BigWidthFactor : DotWidthFactor));
+                // TABModLoader v1.1.7: OEntityMeter.OnRender re-applies the width and calls Update again whenever the bar is
+                // narrower than _MinVisibleWidth, so a thinner bar would be rebuilt every frame
+                if (_minVisible != null) w = Math.Max(w, _minVisible(em));
+                __instance.Width = w;
                 int sh = __instance._Style != null ? __instance._Style.Height : StyleH();
                 __instance.Height = big ? Big(sh) : Dot(sh);
                 if (__instance._OFront != null) __instance._OFront.Visible = false;

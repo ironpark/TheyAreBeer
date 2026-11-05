@@ -2,7 +2,7 @@
 
 ![TheyAreBeer](docs/theyarebeer.png)
 
-They Are Billions 최적화 패치
+## They Are Billions [~데아-비루~](https://www.youtube.com/watch?v=oiFN6TqFWn8) 최적화 모드
 
 치지직 스트리머 **[똘똘똘이](https://chzzk.naver.com/1906dd57f578c255feca54700bcccfc9)** 님이 배포한 **They Are Billions 비공식 최적화 패치 모드**를 수정,개선한 소스 코드 저장소입니다. 
 원본 모드 이름은 **TAB 최적화 패치(TABPerf)** 입니다.

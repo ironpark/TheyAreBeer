@@ -93,19 +93,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Engine chipmunk
 
 </details>
 
-### 물리 DLL 연결 방식
-
-게임이 물리 DLL을 부르는 선언(`DXVision.DXPhysicsNative`의 `[DllImport("DXPhysicsNative.dll")]`)은 .NET Framework가 게임 폴더의 `DXPhysicsNative.dll`에 연결합니다. 그래서 같은 이름의 DLL을 모드 폴더에 두기만 하면, 미리 불러 두어도 게임은 게임 폴더의 원작 DLL을 씁니다. TABModLoader도 네이티브 DLL은 따로 처리하지 않습니다.
-
-엔진 모드는 게임 파일을 바꾸지 않고, 게임 코드의 물리 호출을 고쳐 이 문제를 피합니다.
-
-1. 고른 엔진의 DLL을 전체 경로로 불러옵니다. 게임 폴더 물리 DLL의 함수가 대체본에 모두 있는지 확인합니다. 게임이 선언만 하고 원작에도 없는 함수 4개는 확인에서 뺍니다.
-2. 게임의 선언 47개와 같은 이름, 같은 시그니처, 같은 마샬링의 P/Invoke 메서드를 실행 중에 만듭니다. 이때 `DllImport`에는 대체본의 전체 경로를 씁니다.
-3. 게임 어셈블리에서 이 선언을 부르는 메서드(지금 버전은 `DXPhysicBody`와 `DXPhysicWorld`의 36개)를 IL에서 찾습니다. Harmony 트랜스파일러로 호출 대상만 새 메서드로 바꿉니다.
-
-새 P/Invoke 메서드에는 `SuppressUnmanagedCodeSecurity`를 붙여 호출마다의 권한 검사를 생략합니다(`TABPERF_SUCS=0`이면 끔). Rapier 판에서는 위치·속도·힘 등 몸체 값 읽기·쓰기 8종을 DLL을 거치지 않고 몸체 기록에서 직접 처리합니다(`TABPERF_FASTBODY=0`이면 끔). 그래서 호출 비용은 원작보다 작습니다([측정](docs/DEVELOPMENT.md#호출-비용-줄이기)).
-
-한 DLL에서 받은 핸들이 다른 DLL로 넘어가지 않도록, 연결은 전부 되거나 전혀 안 되거나 둘 중 하나입니다. 대체본에 함수가 빠졌거나 패치 하나가 실패하면 모두 되돌리고 게임 폴더의 DLL을 씁니다. 연결 결과는 `billions.log`의 `물리 연결:` 줄에 남습니다. 성능 시험 모드는 끝날 때 게임 폴더의 물리 DLL이 한 번도 불리지 않았는지 확인해 기록합니다.
+### 지우기와 다른 모드
 
 `Mods\Billions\Billions.dll`이 있으면 같은 최적화를 수행하는 다른 모드가 있는 것으로 판단해 TABPerf는 적용을 건너뜁니다. TABPerf가 여러 폴더에서 중복 로드되는 경우에도 한 번만 적용합니다.
 
@@ -152,7 +140,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Engine chipmunk
 
 ### 물리 엔진 선택
 
-`engine.json`의 `physicsEngine`으로 물리 엔진을 고릅니다. `install.ps1 -Engine`으로도 정할 수 있습니다. 게임을 다시 시작해야 적용됩니다.
+`engine.json`의 `physicsEngine`으로 물리 엔진을 고릅니다(게임 옵션 창의 최적화 탭, `install.ps1 -Engine`으로도 정할 수 있음). 게임을 다시 시작해야 적용됩니다. 모드는 게임 파일을 바꾸지 않고, 게임의 물리 호출을 실행 중에 모드 폴더의 DLL로 돌립니다([연결 방식](docs/DEVELOPMENT.md#연결-방식)).
 
 ```json
 {

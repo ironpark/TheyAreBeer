@@ -23,13 +23,100 @@
 <text class="tm" x="850.0" y="326" font-size="11" text-anchor="middle">240</text>
 <text class="tm" x="457.0" y="350" font-size="11" text-anchor="middle">실제 경과 시간 (초)</text>
 <text class="tm" x="12" y="70" font-size="11" text-anchor="start">좀비 수</text>
-<path class="s-original" d="M64.0,274.1 L67.3,272.3 L70.5,270.1 L73.8,268.8 L77.1,266.7 L80.4,264.7" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path class="s-original" d="M64.0,274.1 L67.3,272.1 L70.5,270.1 L74.2,268.1 L77.4,266.7 L80.7,264.6 L84.3,262.5 L87.6,261.2 L90.9,259.2 L94.1,257.9 L97.4,256.1 L101.0,254.3 L104.3,253.0 L107.6,251.2 L110.8,250.1 L114.1,248.3 L117.7,247.3 L121.0,245.8 L124.3,245.2 L127.5,243.8 L130.8,243.2 L134.4,241.9 L137.7,241.3 L141.0,240.1 L144.2,239.4 L147.5,238.2 L150.8,237.7 L154.4,236.6 L157.7,235.9 L160.9,235.4 L164.2,234.3 L167.5,233.7 L171.1,232.6 L174.4,232.2 L177.6,231.6 L181.2,230.5 L184.5,230.0 L187.8,229.6 L191.1,228.4 L194.3,228.0 L197.9,226.9 L201.2,226.4 L204.5,226.0 L207.8,224.9 L211.0,224.5 L214.3,224.0 L217.6,222.9 L221.2,222.5 L224.5,222.1 L227.8,221.0 L231.0,220.7 L234.3,220.3 L237.6,219.8 L241.2,218.9 L244.5,218.5 L247.7,218.0 L251.0,217.1 L254.3,216.7 L257.9,216.4 L261.2,216.0 L264.4,215.1 L267.7,214.8 L271.0,214.3 L274.6,213.6 L277.9,213.2 L281.1,212.9 L284.4,212.5 L287.7,211.8 L291.3,211.4 L294.6,211.0 L297.8,210.7 L301.1,210.0 L304.7,209.6 L308.0,209.2 L311.3,208.5 L314.5,208.2 L318.1,207.9 L321.4,207.5 L324.7,206.8 L328.0,206.5 L331.2,206.2 L334.8,205.9 L338.1,205.1 L341.4,204.9 L344.7,204.5 L347.9,204.2 L351.5,203.9 L354.8,203.2 L358.1,202.9 L361.4,202.5 L364.6,202.3 L368.2,201.6 L371.5,201.2" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <circle cx="64.0" cy="274.1" r="10" fill="transparent"><title>원작 · 0초: 15,875마리</title></circle>
-<circle cx="67.3" cy="272.3" r="10" fill="transparent"><title>원작 · 1초: 16,729마리</title></circle>
-<circle cx="70.5" cy="270.1" r="10" fill="transparent"><title>원작 · 2초: 17,745마리</title></circle>
-<circle cx="73.8" cy="268.8" r="10" fill="transparent"><title>원작 · 3초: 18,385마리</title></circle>
-<circle cx="77.1" cy="266.7" r="10" fill="transparent"><title>원작 · 4초: 19,354마리</title></circle>
-<circle cx="80.4" cy="264.7" r="10" fill="transparent"><title>원작 · 5초: 20,295마리</title></circle>
+<circle cx="67.3" cy="272.1" r="10" fill="transparent"><title>원작 · 1초: 16,813마리</title></circle>
+<circle cx="70.5" cy="270.1" r="10" fill="transparent"><title>원작 · 2초: 17,767마리</title></circle>
+<circle cx="74.2" cy="268.1" r="10" fill="transparent"><title>원작 · 3초: 18,697마리</title></circle>
+<circle cx="77.4" cy="266.7" r="10" fill="transparent"><title>원작 · 4초: 19,377마리</title></circle>
+<circle cx="80.7" cy="264.6" r="10" fill="transparent"><title>원작 · 5초: 20,342마리</title></circle>
+<circle cx="84.3" cy="262.5" r="10" fill="transparent"><title>원작 · 6초: 21,351마리</title></circle>
+<circle cx="87.6" cy="261.2" r="10" fill="transparent"><title>원작 · 7초: 21,939마리</title></circle>
+<circle cx="90.9" cy="259.2" r="10" fill="transparent"><title>원작 · 8초: 22,893마리</title></circle>
+<circle cx="94.1" cy="257.9" r="10" fill="transparent"><title>원작 · 9초: 23,501마리</title></circle>
+<circle cx="97.4" cy="256.1" r="10" fill="transparent"><title>원작 · 10초: 24,328마리</title></circle>
+<circle cx="101.0" cy="254.3" r="10" fill="transparent"><title>원작 · 11초: 25,180마리</title></circle>
+<circle cx="104.3" cy="253.0" r="10" fill="transparent"><title>원작 · 12초: 25,788마리</title></circle>
+<circle cx="107.6" cy="251.2" r="10" fill="transparent"><title>원작 · 13초: 26,622마리</title></circle>
+<circle cx="110.8" cy="250.1" r="10" fill="transparent"><title>원작 · 14초: 27,134마리</title></circle>
+<circle cx="114.1" cy="248.3" r="10" fill="transparent"><title>원작 · 15초: 27,977마리</title></circle>
+<circle cx="117.7" cy="247.3" r="10" fill="transparent"><title>원작 · 16초: 28,457마리</title></circle>
+<circle cx="121.0" cy="245.8" r="10" fill="transparent"><title>원작 · 17초: 29,133마리</title></circle>
+<circle cx="124.3" cy="245.2" r="10" fill="transparent"><title>원작 · 18초: 29,453마리</title></circle>
+<circle cx="127.5" cy="243.8" r="10" fill="transparent"><title>원작 · 19초: 30,076마리</title></circle>
+<circle cx="130.8" cy="243.2" r="10" fill="transparent"><title>원작 · 20초: 30,396마리</title></circle>
+<circle cx="134.4" cy="241.9" r="10" fill="transparent"><title>원작 · 22초: 30,975마리</title></circle>
+<circle cx="137.7" cy="241.3" r="10" fill="transparent"><title>원작 · 22초: 31,275마리</title></circle>
+<circle cx="141.0" cy="240.1" r="10" fill="transparent"><title>원작 · 24초: 31,837마리</title></circle>
+<circle cx="144.2" cy="239.4" r="10" fill="transparent"><title>원작 · 24초: 32,137마리</title></circle>
+<circle cx="147.5" cy="238.2" r="10" fill="transparent"><title>원작 · 26초: 32,703마리</title></circle>
+<circle cx="150.8" cy="237.7" r="10" fill="transparent"><title>원작 · 26초: 32,943마리</title></circle>
+<circle cx="154.4" cy="236.6" r="10" fill="transparent"><title>원작 · 28초: 33,486마리</title></circle>
+<circle cx="157.7" cy="235.9" r="10" fill="transparent"><title>원작 · 29초: 33,786마리</title></circle>
+<circle cx="160.9" cy="235.4" r="10" fill="transparent"><title>원작 · 30초: 34,026마리</title></circle>
+<circle cx="164.2" cy="234.3" r="10" fill="transparent"><title>원작 · 31초: 34,567마리</title></circle>
+<circle cx="167.5" cy="233.7" r="10" fill="transparent"><title>원작 · 32초: 34,807마리</title></circle>
+<circle cx="171.1" cy="232.6" r="10" fill="transparent"><title>원작 · 33초: 35,341마리</title></circle>
+<circle cx="174.4" cy="232.2" r="10" fill="transparent"><title>원작 · 34초: 35,521마리</title></circle>
+<circle cx="177.6" cy="231.6" r="10" fill="transparent"><title>원작 · 35초: 35,821마리</title></circle>
+<circle cx="181.2" cy="230.5" r="10" fill="transparent"><title>원작 · 36초: 36,313마리</title></circle>
+<circle cx="184.5" cy="230.0" r="10" fill="transparent"><title>원작 · 37초: 36,553마리</title></circle>
+<circle cx="187.8" cy="229.6" r="10" fill="transparent"><title>원작 · 38초: 36,773마리</title></circle>
+<circle cx="191.1" cy="228.4" r="10" fill="transparent"><title>원작 · 39초: 37,322마리</title></circle>
+<circle cx="194.3" cy="228.0" r="10" fill="transparent"><title>원작 · 40초: 37,502마리</title></circle>
+<circle cx="197.9" cy="226.9" r="10" fill="transparent"><title>원작 · 41초: 38,018마리</title></circle>
+<circle cx="201.2" cy="226.4" r="10" fill="transparent"><title>원작 · 42초: 38,258마리</title></circle>
+<circle cx="204.5" cy="226.0" r="10" fill="transparent"><title>원작 · 43초: 38,438마리</title></circle>
+<circle cx="207.8" cy="224.9" r="10" fill="transparent"><title>원작 · 44초: 38,972마리</title></circle>
+<circle cx="211.0" cy="224.5" r="10" fill="transparent"><title>원작 · 45초: 39,152마리</title></circle>
+<circle cx="214.3" cy="224.0" r="10" fill="transparent"><title>원작 · 46초: 39,372마리</title></circle>
+<circle cx="217.6" cy="222.9" r="10" fill="transparent"><title>원작 · 47초: 39,872마리</title></circle>
+<circle cx="221.2" cy="222.5" r="10" fill="transparent"><title>원작 · 48초: 40,092마리</title></circle>
+<circle cx="224.5" cy="222.1" r="10" fill="transparent"><title>원작 · 49초: 40,272마리</title></circle>
+<circle cx="227.8" cy="221.0" r="10" fill="transparent"><title>원작 · 50초: 40,782마리</title></circle>
+<circle cx="231.0" cy="220.7" r="10" fill="transparent"><title>원작 · 51초: 40,942마리</title></circle>
+<circle cx="234.3" cy="220.3" r="10" fill="transparent"><title>원작 · 52초: 41,122마리</title></circle>
+<circle cx="237.6" cy="219.8" r="10" fill="transparent"><title>원작 · 53초: 41,342마리</title></circle>
+<circle cx="241.2" cy="218.9" r="10" fill="transparent"><title>원작 · 54초: 41,786마리</title></circle>
+<circle cx="244.5" cy="218.5" r="10" fill="transparent"><title>원작 · 55초: 41,966마리</title></circle>
+<circle cx="247.7" cy="218.0" r="10" fill="transparent"><title>원작 · 56초: 42,186마리</title></circle>
+<circle cx="251.0" cy="217.1" r="10" fill="transparent"><title>원작 · 57초: 42,623마리</title></circle>
+<circle cx="254.3" cy="216.7" r="10" fill="transparent"><title>원작 · 58초: 42,783마리</title></circle>
+<circle cx="257.9" cy="216.4" r="10" fill="transparent"><title>원작 · 59초: 42,943마리</title></circle>
+<circle cx="261.2" cy="216.0" r="10" fill="transparent"><title>원작 · 60초: 43,142마리</title></circle>
+<circle cx="264.4" cy="215.1" r="10" fill="transparent"><title>원작 · 61초: 43,526마리</title></circle>
+<circle cx="267.7" cy="214.8" r="10" fill="transparent"><title>원작 · 62초: 43,686마리</title></circle>
+<circle cx="271.0" cy="214.3" r="10" fill="transparent"><title>원작 · 63초: 43,906마리</title></circle>
+<circle cx="274.6" cy="213.6" r="10" fill="transparent"><title>원작 · 64초: 44,261마리</title></circle>
+<circle cx="277.9" cy="213.2" r="10" fill="transparent"><title>원작 · 65초: 44,421마리</title></circle>
+<circle cx="281.1" cy="212.9" r="10" fill="transparent"><title>원작 · 66초: 44,581마리</title></circle>
+<circle cx="284.4" cy="212.5" r="10" fill="transparent"><title>원작 · 67초: 44,762마리</title></circle>
+<circle cx="287.7" cy="211.8" r="10" fill="transparent"><title>원작 · 68초: 45,108마리</title></circle>
+<circle cx="291.3" cy="211.4" r="10" fill="transparent"><title>원작 · 69초: 45,288마리</title></circle>
+<circle cx="294.6" cy="211.0" r="10" fill="transparent"><title>원작 · 70초: 45,448마리</title></circle>
+<circle cx="297.8" cy="210.7" r="10" fill="transparent"><title>원작 · 71초: 45,602마리</title></circle>
+<circle cx="301.1" cy="210.0" r="10" fill="transparent"><title>원작 · 72초: 45,954마리</title></circle>
+<circle cx="304.7" cy="209.6" r="10" fill="transparent"><title>원작 · 74초: 46,114마리</title></circle>
+<circle cx="308.0" cy="209.2" r="10" fill="transparent"><title>원작 · 74초: 46,294마리</title></circle>
+<circle cx="311.3" cy="208.5" r="10" fill="transparent"><title>원작 · 76초: 46,644마리</title></circle>
+<circle cx="314.5" cy="208.2" r="10" fill="transparent"><title>원작 · 76초: 46,784마리</title></circle>
+<circle cx="318.1" cy="207.9" r="10" fill="transparent"><title>원작 · 78초: 46,944마리</title></circle>
+<circle cx="321.4" cy="207.5" r="10" fill="transparent"><title>원작 · 79초: 47,104마리</title></circle>
+<circle cx="324.7" cy="206.8" r="10" fill="transparent"><title>원작 · 80초: 47,458마리</title></circle>
+<circle cx="328.0" cy="206.5" r="10" fill="transparent"><title>원작 · 81초: 47,558마리</title></circle>
+<circle cx="331.2" cy="206.2" r="10" fill="transparent"><title>원작 · 82초: 47,718마리</title></circle>
+<circle cx="334.8" cy="205.9" r="10" fill="transparent"><title>원작 · 83초: 47,878마리</title></circle>
+<circle cx="338.1" cy="205.1" r="10" fill="transparent"><title>원작 · 84초: 48,211마리</title></circle>
+<circle cx="341.4" cy="204.9" r="10" fill="transparent"><title>원작 · 85초: 48,351마리</title></circle>
+<circle cx="344.7" cy="204.5" r="10" fill="transparent"><title>원작 · 86초: 48,511마리</title></circle>
+<circle cx="347.9" cy="204.2" r="10" fill="transparent"><title>원작 · 87초: 48,671마리</title></circle>
+<circle cx="351.5" cy="203.9" r="10" fill="transparent"><title>원작 · 88초: 48,787마리</title></circle>
+<circle cx="354.8" cy="203.2" r="10" fill="transparent"><title>원작 · 89초: 49,119마리</title></circle>
+<circle cx="358.1" cy="202.9" r="10" fill="transparent"><title>원작 · 90초: 49,279마리</title></circle>
+<circle cx="361.4" cy="202.5" r="10" fill="transparent"><title>원작 · 91초: 49,439마리</title></circle>
+<circle cx="364.6" cy="202.3" r="10" fill="transparent"><title>원작 · 92초: 49,560마리</title></circle>
+<circle cx="368.2" cy="201.6" r="10" fill="transparent"><title>원작 · 93초: 49,883마리</title></circle>
+<circle cx="371.5" cy="201.2" r="10" fill="transparent"><title>원작 · 94초: 50,043마리</title></circle>
 <path class="s-first" d="M64.0,274.1 L67.3,272.1 L70.9,269.8 L74.2,267.6 L77.4,265.9 L80.7,263.6 L84.0,261.4 L87.3,259.3 L90.9,257.7 L94.1,255.5 L97.4,253.3 L100.7,251.1 L104.3,249.5 L107.6,247.4 L110.8,245.6 L114.1,244.0 L117.4,243.1 L120.7,241.5 L123.9,239.8 L127.5,239.0 L130.8,237.3 L134.1,235.8 L137.4,234.2 L140.6,233.3 L143.9,231.7 L147.2,230.2 L150.8,229.4 L154.1,227.8 L157.3,226.3 L160.9,225.4 L164.2,223.9 L167.5,222.3 L170.8,221.5 L174.4,220.0 L177.6,218.6 L180.9,217.7 L184.2,216.3 L187.5,215.1 L191.1,214.1 L194.3,212.9 L197.6,212.1 L200.9,210.8 L204.2,209.6 L207.4,208.8 L210.7,207.6 L214.0,206.9 L217.3,205.6 L220.5,204.4 L224.1,203.7 L227.4,202.5 L230.7,201.7 L234.0,200.5 L237.2,199.3 L240.5,198.5 L244.1,197.4 L247.4,196.6 L250.7,195.5 L253.9,194.3 L257.2,193.5 L260.8,192.4 L264.1,191.6 L267.4,190.5 L271.0,189.8 L274.3,188.7 L277.5,187.7 L280.8,186.8 L284.4,185.7 L287.7,185.0 L291.0,183.8 L294.2,183.2 L297.5,182.1 L300.8,181.4 L304.4,180.2 L307.7,179.5 L310.9,178.3 L314.2,177.7 L317.8,176.6 L321.1,175.9 L324.4,174.9 L327.6,174.2 L330.9,173.1 L334.5,172.4 L337.8,171.3 L341.1,170.6 L344.7,169.5 L347.9,168.9 L351.2,167.9 L354.5,167.2 L357.8,166.2 L361.0,165.6 L364.3,164.7 L367.9,164.0 L371.2,163.1 L374.8,162.5 L378.1,161.6 L381.3,160.9 L384.6,160.1 L387.9,159.5 L391.5,158.7 L394.8,158.1 L398.1,157.2 L401.7,156.6 L404.9,155.8 L408.2,155.1 L411.5,154.5 L414.8,153.7 L418.4,153.0 L421.6,152.3 L425.2,151.5 L428.5,150.7 L432.1,150.1 L435.4,149.3 L438.7,148.8 L442.3,147.8 L445.5,147.3 L448.8,146.4 L452.1,145.9 L455.7,145.1 L459.0,144.5 L462.2,143.7 L465.8,143.1 L469.1,142.5 L472.4,141.7 L476.0,141.1 L479.3,140.4 L482.5,139.8 L485.8,139.0 L489.4,138.5 L492.7,137.7 L496.0,137.0 L499.6,136.5 L502.9,135.7 L506.5,135.1 L509.7,134.4 L513.0,133.8 L516.6,133.2 L519.9,132.5 L523.5,131.8 L526.8,131.3 L530.0,130.7 L533.6,129.9 L536.9,129.4 L540.5,128.8 L543.8,128.3 L547.4,127.6 L550.7,127.0 L554.3,126.5 L557.9,125.9 L561.1,125.2 L564.7,124.7 L568.0,124.2 L571.3,123.7 L574.6,123.1 L578.2,122.6 L581.5,122.0 L584.7,121.4 L588.3,120.9 L591.6,120.4 L594.9,119.8 L598.2,119.3 L601.8,118.8 L605.0,118.3 L608.3,117.7 L611.9,117.2 L615.2,116.6 L618.8,116.1 L622.1,115.6 L625.7,115.1 L628.9,114.5 L632.2,114.0 L635.8,113.4 L639.1,112.9 L642.7,112.3 L646.0,111.8 L649.6,111.3 L653.2,110.8 L656.4,110.2 L660.0,109.7 L663.7,109.1 L667.3,108.6 L670.5,108.1 L673.8,107.7 L677.4,107.2 L680.7,106.6 L684.0,106.1 L687.6,105.5 L691.2,105.0 L694.8,104.5 L698.0,104.0 L701.6,103.5 L705.2,102.9 L708.8,102.4 L712.4,101.9 L715.7,101.5 L719.0,101.0 L722.3,100.6 L725.9,100.0 L729.2,99.5 L732.8,99.0 L736.0,98.5 L739.6,98.0 L742.9,97.5 L746.5,97.0 L750.1,96.6 L753.4,96.1 L756.7,95.6 L759.9,95.1 L763.5,94.6" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <circle cx="64.0" cy="274.1" r="10" fill="transparent"><title>최초 배포본 · 0초: 15,875마리</title></circle>
 <circle cx="67.3" cy="272.1" r="10" fill="transparent"><title>최초 배포본 · 1초: 16,828마리</title></circle>
@@ -476,9 +563,9 @@
 <circle cx="438.7" cy="96.0" r="10" fill="transparent"><title>Rapier (DXVK) · 114초: 99,371마리</title></circle>
 <circle cx="442.3" cy="95.1" r="10" fill="transparent"><title>Rapier (DXVK) · 116초: 99,811마리</title></circle>
 <circle cx="445.5" cy="94.1" r="10" fill="transparent"><title>Rapier (DXVK) · 116초: 100,251마리</title></circle>
-<circle class="f-original ring" cx="80.4" cy="264.7" r="4.5" stroke-width="2"/>
-<text class="t1" x="90.375" y="262.7" font-size="12" font-weight="600">원작</text>
-<text class="t2" x="90.375" y="277.7" font-size="11">20,295마리</text>
+<circle class="f-original ring" cx="371.5" cy="201.2" r="4.5" stroke-width="2"/>
+<text class="t1" x="381.5225" y="199.2" font-size="12" font-weight="600">원작</text>
+<text class="t2" x="381.5225" y="214.2" font-size="11">50,043마리</text>
 <circle class="f-first ring" cx="763.5" cy="94.6" r="4.5" stroke-width="2"/>
 <text class="t1" x="773.54" y="92.6" font-size="12" font-weight="600">최초 배포본</text>
 <text class="t2" x="773.54" y="107.6" font-size="11">100,020마리</text>

@@ -1,6 +1,6 @@
 # In-game benchmark: the same fixed scenario on the unmodded game, the first release of the mod and the current mod.
 #   powershell -ExecutionPolicy Bypass -File scripts\bench.ps1 [-Target original,first,chipmunk,rapier] [-Dxvk] [-Zombies 100000]
-#     [-OriginalZombies 20000] [-Runs 1] [-Factor 4] [-Delay 5] [-Seed 20261104] [-Timeout 3600] [-Zoom max|off] [-Diag] [-Threads -1] [-Counters]
+#     [-OriginalZombies 50000] [-Runs 1] [-Factor 4] [-Delay 5] [-Seed 20261104] [-Timeout 3600] [-Zoom max|off] [-Diag] [-Threads -1] [-Counters]
 #     [-OutDir <folder>] [-GameDir <folder>]
 #
 # Targets:
@@ -32,7 +32,7 @@ param(
   [string[]]$Target = @('original', 'first', 'chipmunk', 'rapier'),
   [switch]$Dxvk,
   [int]$Zombies = 100000,
-  [int]$OriginalZombies = 20000,
+  [int]$OriginalZombies = 50000,
   [int]$Runs = 1,
   [int]$Factor = 4,
   [int]$Delay = 5,

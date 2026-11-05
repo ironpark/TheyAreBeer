@@ -12,7 +12,7 @@
 2. 시작 애니메이션이 끝나 입력이 켜지면 카메라를 게임의 최대 축소 폭(마우스 휠로 뺄 수 있는 끝)으로 맞추고, 시험 내내 유지합니다(`-Zoom max`).
 3. 레벨 시작 5초 뒤 피해를 끄고(`CLife.DamageAvailable`, 게임의 디버그 스위치) 마지막 웨이브를 4번 발생시킵니다. 생성기 4곳에서 한 번에 생성기당 약 4,350마리가 나옵니다.
 4. 좀비가 죽지 않고 지휘본부도 무너지지 않으므로, 좀비가 계속 늘며 지휘본부로 몰립니다.
-5. 1초마다 CSV에 한 줄을 씁니다. 살아 있는 좀비가 10만 마리(`-Zombies`, 원작은 2만 마리 `-OriginalZombies`)가 되면 게임을 끕니다.
+5. 1초마다 CSV에 한 줄을 씁니다. 살아 있는 좀비가 10만 마리(`-Zombies`, 원작은 5만 마리 `-OriginalZombies`)가 되면 게임을 끕니다.
 
 게임 설정(그래픽 옵션, 빠른 타이머 FastTimming, 수직 동기화 등)은 사용자의 게임 설정을 그대로 씁니다. 쓰인 값은 `%APPDATA%\TABPerf\tabbench.log`에 남습니다.
 
@@ -78,7 +78,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bench.ps1 -Dxvk
 | `-Target` | `original,first,chipmunk,rapier` | 시험할 대상(위 표)을 쉼표로 나열 |
 | `-Dxvk` | 끔 | `chipmunk`·`rapier`를 DXVK로 |
 | `-Zombies` | `100000` | 이 수가 되면 시험 끝 |
-| `-OriginalZombies` | `20000` | 원작(`original`)은 이 수에서 끝. 좀비가 많으면 원작이 매우 느려지기 때문 |
+| `-OriginalZombies` | `50000` | 원작(`original`)은 이 수에서 끝. 좀비가 많으면 원작이 매우 느려지기 때문 |
 | `-Timeout` | `3600` | 레벨 시작부터 이 시간(초)이 지나면 좀비 수와 상관없이 끝 |
 | `-Runs` | `1` | 대상마다 반복할 횟수 |
 | `-Factor` | `4` | 마지막 웨이브를 몇 번 발생시킬지(1~20) |

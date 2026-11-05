@@ -224,7 +224,7 @@
 ### 성능 시험과 문서
 
 #### 변경
-- `scripts\bench.ps1`: 같은 시나리오로 원작(모드 없음)·최초 배포본(`ef035e1`)·현재 모드 Chipmunk·Rapier를 시험합니다(`-Target original,first,chipmunk,rapier`, `-Dxvk`). 정해진 시간 대신 좀비가 `-Zombies`(기본 10만, 원작은 `-OriginalZombies` 2만)마리가 되면 끝납니다. 최초 배포본은 그 커밋을 한 번 빌드해 쓰고, 게임 폴더에서 바꾼 것은 끝나면 되돌립니다. ([사용법](docs/BENCH.md))
+- `scripts\bench.ps1`: 같은 시나리오로 원작(모드 없음)·최초 배포본(`ef035e1`)·현재 모드 Chipmunk·Rapier를 시험합니다(`-Target original,first,chipmunk,rapier`, `-Dxvk`). 정해진 시간 대신 좀비가 `-Zombies`(기본 10만, 원작은 `-OriginalZombies` 5만)마리가 되면 끝납니다. 최초 배포본은 그 커밋을 한 번 빌드해 쓰고, 게임 폴더에서 바꾼 것은 끝나면 되돌립니다. ([사용법](docs/BENCH.md))
 - 측정은 별도 모드 TABBench(`bench/`, `scripts\build.ps1 -Target bench`)가 합니다. 모든 대상이 같은 측정 코드로 잽니다.
   - 측정 모드가 렌더 스레드에서 쓴 시간은 프레임 시간에서 뺍니다.
   - 좀비 수는 형식별 엔티티 목록 크기로 읽습니다. 전에는 1초마다 좀비를 하나씩 세어 그 프레임이 길어졌습니다.

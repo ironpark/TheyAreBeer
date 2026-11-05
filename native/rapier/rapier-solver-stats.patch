@@ -1,18 +1,19 @@
 diff --git a/bindings/c/src/pipeline.rs b/bindings/c/src/pipeline.rs
-index 6c08a06..2e5789a 100644
+index 6c08a06..3895f56 100644
 --- a/bindings/c/src/pipeline.rs
 +++ b/bindings/c/src/pipeline.rs
-@@ -2367,6 +2367,23 @@ pub unsafe extern "C" fn rpr_step_counters(
+@@ -2367,6 +2367,24 @@ pub unsafe extern "C" fn rpr_step_counters(
      })
  }
  
 +/// Number of values rpr_solver_diag writes.
-+pub const RPR_SOLVER_DIAG_COUNT: usize = 9;
++pub const RPR_SOLVER_DIAG_COUNT: usize = rapier::counters::SOLVER_DIAG_COUNT;
 +
 +/// Staged-solver diagnostics summed since the previous call, then reset (recorded only while the
 +/// RAPIER_SOLVER_DIAG environment variable is set): 0 barrier wait ns (all workers), 1 barrier
 +/// waits, 2 worker-0 serial overflow ns, 3 worker run ns (all workers), 4 colors, 5 overflow
-+/// chunks, 6 chunks, 7 workers, 8 solves (4-7 summed per solve).
++/// chunks, 6 chunks, 7 workers, 8 solves (4-7 summed per solve), then serial section ns and counts
++/// (see rapier::counters::SOLVER_DIAG_COUNT).
 +/// @ingroup worlds
 +#[rapier_export]
 +pub unsafe extern "C" fn rpr_solver_diag(buffer: *mut f64, capacity: usize, count: *mut usize) -> RprStatus {
@@ -27,18 +28,30 @@ index 6c08a06..2e5789a 100644
  /// produced by the identical Rapier build. This is not a stable interchange format.
  ///
 diff --git a/src/counters/mod.rs b/src/counters/mod.rs
-index e48c8eb..02b64ac 100644
+index e48c8eb..0bb8e30 100644
 --- a/src/counters/mod.rs
 +++ b/src/counters/mod.rs
-@@ -9,6 +9,49 @@ pub use self::solver_counters::SolverCounters;
+@@ -9,6 +9,92 @@ pub use self::solver_counters::SolverCounters;
  pub use self::stages_counters::StagesCounters;
  pub use self::timer::Timer;
  
 +/// Staged-solver diagnostics (TABPerf), summed until [`solver_diag_take`], recorded only while the
 +/// `RAPIER_SOLVER_DIAG` environment variable is set: 0 barrier wait ns (all workers), 1 barrier
 +/// waits, 2 worker-0 serial overflow ns, 3 worker run ns (all workers), 4 colors, 5 overflow
-+/// chunks, 6 chunks, 7 workers, 8 solves.
-+pub const SOLVER_DIAG_COUNT: usize = 9;
++/// chunks, 6 chunks, 7 workers, 8 solves. Serial sections (ns), timed with [`DiagLap`]: velocity assembly
++/// 9 buffers & solver bodies, 10 joints, 11 chunk layout, 12 constraint buffers & generic, 13 stats;
++/// narrow phase 14 user changes, 15 register pairs, 16 awake mask & candidates, 17 pair update
++/// (parallel), 18 transitions, 19 intersections; constraint collection 20 solver graph, 21 joints.
++/// Counts: 22 broad-phase pair adds, 23 pair removals, 24 solver-graph full rebuilds, 25 pairs
++/// fully updated (reconciled when not rebuilding); solver graph sections (ns): 26 body table, 27 buckets.
++/// Rebuild causes (counts): 28 graph invalidated, active-set epoch bumps by 29 body updated, 30 body
++/// removed or disabled, 31 bodies put to sleep, 32 bodies woken, 33 substep groups. Body updates
++/// (counts, not exclusive): 34 fixed, 35 sleep flag, 36 type or enabled changed, 37 not in an island
++/// yet, 38 colliders / mass / dominance changed, 39 all. Pair registration (ns): 40 adds; removals
++/// 41 lookups, 42 edge find & unlink, 43 solver graph & force list, 44 swap-remove & relink,
++/// 45 moved edge fixup, 46 persistent islands, 47 colors, wake-up, retire. Pair adds (ns): 48 graph
++/// indices, 49 nodes & edge lookup, 50 pair from pool or new. Pairs added from the pool: 51.
++pub const SOLVER_DIAG_COUNT: usize = 52;
 +static SOLVER_DIAG: [core::sync::atomic::AtomicU64; SOLVER_DIAG_COUNT] =
 +    [const { core::sync::atomic::AtomicU64::new(0) }; SOLVER_DIAG_COUNT];
 +
@@ -69,22 +82,196 @@ index e48c8eb..02b64ac 100644
 +#[cfg(feature = "std")]
 +pub fn solver_diag_since(k: usize, start: Option<std::time::Instant>) {
 +    if let Some(t) = start {
-+        SOLVER_DIAG[k].fetch_add(t.elapsed().as_nanos() as u64, core::sync::atomic::Ordering::Relaxed);
++        add_ns(k, t, std::time::Instant::now());
 +    }
++}
++#[cfg(feature = "std")]
++fn add_ns(k: usize, from: std::time::Instant, to: std::time::Instant) {
++    SOLVER_DIAG[k].fetch_add((to - from).as_nanos() as u64, core::sync::atomic::Ordering::Relaxed);
 +}
 +/// Returns the diagnostics and resets them.
 +pub fn solver_diag_take() -> [u64; SOLVER_DIAG_COUNT] {
 +    core::array::from_fn(|k| SOLVER_DIAG[k].swap(0, core::sync::atomic::Ordering::Relaxed))
 +}
++/// Consecutive serial sections: each [`DiagLap::lap`] adds the time since the previous lap (or the
++/// start) to a diagnostic. Does nothing when not recording.
++pub struct DiagLap(#[cfg(feature = "std")] Option<std::time::Instant>);
++impl DiagLap {
++    /// Starts timing (when recording).
++    pub fn start() -> Self {
++        #[cfg(feature = "std")]
++        {
++            DiagLap(solver_diag_start())
++        }
++        #[cfg(not(feature = "std"))]
++        {
++            DiagLap()
++        }
++    }
++    /// Adds the time since the previous lap to diagnostic `k`.
++    pub fn lap(&mut self, k: usize) {
++        #[cfg(feature = "std")]
++        if let Some(t) = self.0 {
++            let now = std::time::Instant::now();
++            add_ns(k, t, now);
++            self.0 = Some(now);
++        }
++        #[cfg(not(feature = "std"))]
++        let _ = k;
++    }
++}
 +
  mod ccd_counters;
  mod collision_detection_counters;
  mod solver_counters;
+diff --git a/src/dynamics/island_manager/island.rs b/src/dynamics/island_manager/island.rs
+index 9e5cdfa..8de1554 100644
+--- a/src/dynamics/island_manager/island.rs
++++ b/src/dynamics/island_manager/island.rs
+@@ -42,6 +42,7 @@ impl IslandManager {
+         new_island: Island,
+     ) {
+         self.bump_active_set_epoch();
++        crate::counters::solver_diag_add(31, 1);
+         let new_island_id = self.free_islands.pop().unwrap_or(self.islands.len());
+         let source_island = &mut self.islands[source_id];
+ 
+diff --git a/src/dynamics/island_manager/manager.rs b/src/dynamics/island_manager/manager.rs
+index cc04b43..8b9a58c 100644
+--- a/src/dynamics/island_manager/manager.rs
++++ b/src/dynamics/island_manager/manager.rs
+@@ -74,6 +74,7 @@ impl IslandManager {
+         bodies: &mut RigidBodySet,
+     ) {
+         self.bump_active_set_epoch();
++        crate::counters::solver_diag_add(30, 1);
+ 
+         // Persistent islands: drop the body (clears the live body's ids too,
+         // for the disabled case; uses the captured ids for the removed case).
+@@ -313,6 +314,22 @@ impl IslandManager {
+         // others in place: it is listed in `appended_active_bodies` for the body table instead.
+         // Bumping anyway forced a full solver-graph rebuild on every step a game writes body
+         // states or adds a body.
++        if crate::counters::solver_diag_on() {
++            if let Some(rb) = bodies.get(handle) {
++                use crate::counters::solver_diag_add as add;
++                let c = rb.changes;
++                add(39, 1);
++                add(34, rb.is_fixed() as u64);
++                add(35, c.contains(RigidBodyChanges::SLEEP) as u64);
++                add(36, c.intersects(RigidBodyChanges::TYPE | RigidBodyChanges::ENABLED_OR_DISABLED) as u64);
++                add(37, (rb.ids.active_island_id == u32::MAX) as u64);
++                add(38, c.intersects(
++                    RigidBodyChanges::COLLIDERS
++                        | RigidBodyChanges::LOCAL_MASS_PROPERTIES
++                        | RigidBodyChanges::DOMINANCE,
++                ) as u64);
++            }
++        }
+         let appended = match bodies.get(handle) {
+             Some(rb) if stable_epoch_on() && rb.is_enabled() => {
+                 if !rb.is_fixed() && rb.ids.active_island_id == u32::MAX {
+@@ -326,6 +343,7 @@ impl IslandManager {
+         };
+         if appended.is_none() {
+             self.bump_active_set_epoch();
++            crate::counters::solver_diag_add(29, 1);
+         }
+         let Some(rb) = bodies.get_mut(handle) else {
+             return;
+diff --git a/src/dynamics/island_manager/sleep.rs b/src/dynamics/island_manager/sleep.rs
+index fe11b6a..c09f6b5 100644
+--- a/src/dynamics/island_manager/sleep.rs
++++ b/src/dynamics/island_manager/sleep.rs
+@@ -105,6 +105,7 @@ impl IslandManager {
+             // epoch-keyed caches can't go stale. The hint count-clears above only cover bodies
+             // WITH colliders — collider-less (joint-only) bodies would otherwise sleep without invalidating e.g. the cached body qualification table.
+             self.active_set_epoch = self.active_set_epoch.wrapping_add(1);
++            crate::counters::solver_diag_add(31, 1);
+ 
+             // Mark the island as sleeping: no island is awake anymore.
+             debug_assert_eq!(self.awake_island, Some(active_island_id));
+@@ -146,6 +147,7 @@ impl IslandManager {
+                 // keep their `active_set_id`s), but the active-set *membership* changes, so
+                 // epoch-keyed caches (body qualification table, persistent solver graph, solver constraint caches) must not survive — bump the epoch like the merge branch. (Direct field bump: `island` still borrows `self.islands`.)
+                 self.active_set_epoch = self.active_set_epoch.wrapping_add(1);
++                crate::counters::solver_diag_add(32, 1);
+                 self.awake_island = Some(island_id);
+ 
+                 for handle in &island.bodies {
+@@ -157,6 +159,7 @@ impl IslandManager {
+             Some(awake_id) => {
+                 // Merge the chunk's bodies into the single awake island.
+                 self.bump_active_set_epoch();
++                crate::counters::solver_diag_add(32, 1);
+                 let Some(removed) = self.islands.remove(island_id) else {
+                     unreachable!()
+                 };
+diff --git a/src/dynamics/island_manager/substep_groups.rs b/src/dynamics/island_manager/substep_groups.rs
+index 27c1ac0..ce7ac22 100644
+--- a/src/dynamics/island_manager/substep_groups.rs
++++ b/src/dynamics/island_manager/substep_groups.rs
+@@ -248,6 +248,7 @@ impl IslandManager {
+         ws.keys.sort_unstable_by(|a, b| b.cmp(a));
+         push_group_ranges(&mut self.solve_groups, &ws.keys);
+         self.bump_active_set_epoch();
++        crate::counters::solver_diag_add(33, 1);
+     }
+ }
+ 
 diff --git a/src/dynamics/solver/staged_island_solver/init.rs b/src/dynamics/solver/staged_island_solver/init.rs
-index 710c186..a12c1a4 100644
+index 710c186..3879285 100644
 --- a/src/dynamics/solver/staged_island_solver/init.rs
 +++ b/src/dynamics/solver/staged_island_solver/init.rs
-@@ -654,6 +654,14 @@ impl StagedIslandSolver {
+@@ -54,6 +54,7 @@ impl StagedIslandSolver {
+         contact_color_masks: &[u128],
+     ) {
+         counters.solver.velocity_assembly_time.resume();
++        let mut lap = crate::counters::DiagLap::start();
+         // Substep solve-groups: each group (contiguous constraint-closed awake-body range, keyed
+         // by max `additional_solver_iterations`) runs `base + extra` substeps at smaller dt —
+         // real substeps buy convergence on high mass ratios, unlike the flat PGS sweeps they
+@@ -272,6 +273,7 @@ impl StagedIslandSolver {
+             + fem_chunks;
+         let num_workers = num_workers.clamp(1, (approx_chunks / 16).max(1));
+ 
++        lap.lap(9);
+         // Joints: colored like contacts and laid out color by color (scalar
+         // constraints only). Colors too small to parallelize plus the generic
+         // (multibody) joints are solved by worker 0 in exclusive stages.
+@@ -299,6 +301,7 @@ impl StagedIslandSolver {
+             g.joint_builders = l.builders.clone();
+             g.joint_overflow = l.overflow.clone();
+         }
++        lap.lap(10);
+ 
+         let set = &mut self.contact_constraints;
+ 
+@@ -554,6 +557,7 @@ impl StagedIslandSolver {
+             }
+         }
+ 
++        lap.lap(11);
+         let num_chunks = next_chunk;
+         #[cfg(feature = "dim3")]
+         let use_twist = matches!(params.friction_model, FrictionModel::Simplified);
+@@ -597,6 +601,7 @@ impl StagedIslandSolver {
+             .any(|(b, c)| b.has_bouncy_seed(c.num_contacts));
+         self.any_bouncy.store(generic_bouncy, Ordering::Relaxed);
+ 
++        lap.lap(12);
+         // Constraint statistics, summed over the CCD substeps.
+         if counters.enabled {
+             let num_rigid_contacts: usize = graph
+@@ -609,6 +614,7 @@ impl StagedIslandSolver {
+             counters.solver.ncontacts += num_rigid_contacts + self.soft_constraints.contacts.len();
+         }
+ 
++        lap.lap(13);
+         counters.solver.velocity_assembly_time.pause();
+         counters.solver.velocity_resolution_time.resume();
+ 
+@@ -654,6 +660,14 @@ impl StagedIslandSolver {
          };
  
          let ctx_ref = &ctx;
@@ -99,7 +286,7 @@ index 710c186..a12c1a4 100644
  
          // Parallel build: spawn workers `1..num_workers` into a rayon scope, run worker 0
          // inline. Non-parallel/wasm build: `num_workers == 1`, worker 0 runs inline and
-@@ -662,17 +670,21 @@ impl StagedIslandSolver {
+@@ -662,17 +676,21 @@ impl StagedIslandSolver {
          rayon::in_place_scope(|scope| {
              for worker_id in 1..num_workers {
                  scope.spawn(move |_| {
@@ -185,3 +372,254 @@ index f38c2e5..45fdad6 100644
  
                      let contacts = unsafe { &mut *ctx.contact_constraints };
                      let vs = unsafe { &mut *ctx.velocity_solver };
+diff --git a/src/geometry/narrow_phase/contacts.rs b/src/geometry/narrow_phase/contacts.rs
+index 65d72b0..71c1b69 100644
+--- a/src/geometry/narrow_phase/contacts.rs
++++ b/src/geometry/narrow_phase/contacts.rs
+@@ -43,6 +43,7 @@ impl NarrowPhase {
+         // meshes (`None`: no soft contact detection, as in the collision pipeline).
+         soft_bodies: Option<(&SoftBodySet, &IntegrationParameters)>,
+     ) {
++        let mut lap = crate::counters::DiagLap::start();
+         self.update_awake_body_mask(islands);
+         let awake_body_mask = core::mem::take(&mut self.awake_body_mask);
+         let soft_ctx = soft_bodies.map(|(soft_bodies, params)| SoftDetectionCtx {
+@@ -94,6 +95,7 @@ impl NarrowPhase {
+             |gid| gid.contact_graph_index,
+         );
+ 
++        lap.lap(16);
+         // Begin/end-touch transitions detected during the update; applied by the
+         // sorted post-loop pass (see `PairTransition`).
+         #[cfg(not(feature = "parallel"))]
+@@ -286,6 +288,7 @@ impl NarrowPhase {
+             }
+         }
+ 
++        lap.lap(17);
+         #[cfg(feature = "parallel")]
+         {
+             drop(snd);
+@@ -309,6 +312,7 @@ impl NarrowPhase {
+             self.update_soft_self_contacts(&ctx, bodies);
+         }
+ 
++        lap.lap(18);
+         self.update_candidates = update_candidates;
+         self.awake_body_mask = awake_body_mask;
+         #[cfg(not(feature = "parallel"))]
+diff --git a/src/geometry/narrow_phase/pair_management.rs b/src/geometry/narrow_phase/pair_management.rs
+index c09e2f8..403d943 100644
+--- a/src/geometry/narrow_phase/pair_management.rs
++++ b/src/geometry/narrow_phase/pair_management.rs
+@@ -393,6 +393,7 @@ impl NarrowPhase {
+         events: &dyn EventHandler,
+         mode: PairRemovalMode,
+     ) {
++        let mut lap = crate::counters::DiagLap::start();
+         if let (Some(co1), Some(co2)) =
+             (colliders.get(pair.collider1), colliders.get(pair.collider2))
+         {
+@@ -437,10 +438,12 @@ impl NarrowPhase {
+                     let edges_ptr = self.contact_graph.graph.edges.as_mut_ptr();
+                     let mut removed_index = usize::MAX;
+                     let mut consistent = true;
++                    lap.lap(41);
+                     let contact_pair = self.contact_graph.remove_edge_with(
+                         gid1.contact_graph_index,
+                         gid2.contact_graph_index,
+                         &mut |e| {
++                            lap.lap(42);
+                             removed_index = e.index();
+                             // Mirror the edges vec's swap_remove on the solver hints
+                             // (on length mismatch — deserialized state — drop them
+@@ -496,8 +499,10 @@ impl NarrowPhase {
+                                 force_list.clear();
+                                 consistent = false;
+                             }
++                            lap.lap(43);
+                         },
+                     );
++                    lap.lap(44);
+ 
+                     if !consistent {
+                         // Deserialized/degenerate bookkeeping: rebuild from scratch.
+@@ -528,6 +533,7 @@ impl NarrowPhase {
+                         }
+                     }
+ 
++                    lap.lap(45);
+                     // Persistent islands: unlink the removed pair (if it was
+                     // touching) and mirror the edges-vec swap-remove on the
+                     // link-location table.
+@@ -540,6 +546,7 @@ impl NarrowPhase {
+                         }
+                     }
+ 
++                    lap.lap(46);
+                     // Emit a contact stopped event if we had a contact before removing the edge.
+                     // Also wake up the dynamic bodies that were in contact.
+                     if let Some(mut ctct) = contact_pair {
+@@ -568,6 +575,7 @@ impl NarrowPhase {
+                             self.retired_pairs.push(ctct);
+                         }
+                     }
++                    lap.lap(47);
+                 }
+             }
+         }
+@@ -575,16 +583,24 @@ impl NarrowPhase {
+ 
+     #[profiling::function]
+     fn add_pair(&mut self, colliders: &ColliderSet, pair: &ColliderPair) {
++        let mut lap = crate::counters::DiagLap::start();
++        self.add_pair_inner(colliders, pair);
++        lap.lap(40);
++    }
++
++    fn add_pair_inner(&mut self, colliders: &ColliderSet, pair: &ColliderPair) {
+         if let (Some(co1), Some(co2)) =
+             (colliders.get(pair.collider1), colliders.get(pair.collider2))
+         {
+             // These colliders have no parents - continue.
+ 
++            let mut lap = crate::counters::DiagLap::start();
+             let (gid1, gid2) = self.graph_indices.ensure_pair_exists(
+                 pair.collider1.0,
+                 pair.collider2.0,
+                 ColliderGraphIndices::invalid(),
+             );
++            lap.lap(48);
+ 
+             if co1.is_sensor() || co2.is_sensor() {
+                 // NOTE: the collider won't have a graph index as long
+@@ -633,12 +649,15 @@ impl NarrowPhase {
+                     .find_edge(gid1.contact_graph_index, gid2.contact_graph_index)
+                     .is_none()
+                 {
++                    lap.lap(49);
+                     let interaction = if let Some(mut retired) = self.retired_pairs.pop() {
++                        crate::counters::solver_diag_add(51, 1);
+                         retired.reset_for_reuse(pair.collider1, pair.collider2);
+                         retired
+                     } else {
+                         ContactPair::new(pair.collider1, pair.collider2)
+                     };
++                    lap.lap(50);
+                     // Keep the solver hints aligned with the edges vec at all times: add/remove
+                     // events interleave within a step, so deferred growth would desync the swap_remove
+                     // mirroring. On mismatch (deserialized), drop them — they rebuild lazily.
+@@ -675,6 +694,14 @@ impl NarrowPhase {
+         broad_phase_events: &[BroadPhasePairEvent],
+         events: &dyn EventHandler,
+     ) {
++        if crate::counters::solver_diag_on() {
++            let adds = broad_phase_events
++                .iter()
++                .filter(|e| matches!(e, BroadPhasePairEvent::AddPair(_)))
++                .count();
++            crate::counters::solver_diag_add(22, adds as u64);
++            crate::counters::solver_diag_add(23, (broad_phase_events.len() - adds) as u64);
++        }
+         // TABPerf: each event starts with cold reads (the two colliders, their graph indices,
+         // their graph nodes, then the first links of the nodes' edge lists), each depending on
+         // the previous; the events are independent, so these are prefetched a few events ahead
+diff --git a/src/geometry/narrow_phase/solver_graph.rs b/src/geometry/narrow_phase/solver_graph.rs
+index ea055b3..2e1dcd0 100644
+--- a/src/geometry/narrow_phase/solver_graph.rs
++++ b/src/geometry/narrow_phase/solver_graph.rs
+@@ -139,6 +139,7 @@ impl NarrowPhase {
+         // The body qualification table stays exact while the active set is unchanged: every
+         // membership change bumps the island epoch or clears `solver_graph_valid` (both folded
+         // into `full_rebuild`), so it rebuilds on exactly the solver graph's rebuild condition.
++        let mut lap = crate::counters::DiagLap::start();
+         let appended = &islands.appended_active_bodies;
+         if full_rebuild || self.body_qualify_info.is_empty() {
+             self.rebuild_body_qualify_info(islands, bodies);
+@@ -161,6 +162,10 @@ impl NarrowPhase {
+             }
+         }
+         self.body_qualify_appended = appended.len();
++        lap.lap(26);
++        crate::counters::solver_diag_add(24, full_rebuild as u64);
++        crate::counters::solver_diag_add(28, !self.solver_graph_valid as u64);
++        crate::counters::solver_diag_add(25, self.solver_graph_dirty.len() as u64);
+         #[cfg(debug_assertions)]
+         self.debug_validate_body_qualify_info(islands, bodies);
+         let has_multibodies = multibody_joints.iter().next().is_some();
+@@ -335,6 +340,7 @@ impl NarrowPhase {
+             self.solver_graph_dirty = dirty;
+         }
+ 
++        lap.lap(27);
+         // Reconcile the persistent force-event pair list. Maintained incrementally through every
+         // membership transition (dirty list, inline sleep/removal drops, flagged user changes), so
+         // it needs no epoch full rebuilds — only a deserialized/degenerate state triggers the scan.
+diff --git a/src/pipeline/physics_pipeline/solve.rs b/src/pipeline/physics_pipeline/solve.rs
+index 7ba3202..4293dce 100644
+--- a/src/pipeline/physics_pipeline/solve.rs
++++ b/src/pipeline/physics_pipeline/solve.rs
+@@ -108,6 +108,7 @@ impl PhysicsPipeline {
+ 
+         self.counters.cd.broad_phase_time.pause();
+         self.counters.cd.narrow_phase_time.resume();
++        let mut lap = crate::counters::DiagLap::start();
+ 
+         // Update narrow-phase.
+         if handle_user_changes {
+@@ -120,6 +121,7 @@ impl PhysicsPipeline {
+                 events,
+             );
+         }
++        lap.lap(14);
+         narrow_phase.register_pairs(
+             Some(islands),
+             colliders,
+@@ -127,6 +129,7 @@ impl PhysicsPipeline {
+             &self.broad_phase_events,
+             events,
+         );
++        lap.lap(15);
+         narrow_phase.compute_contacts(
+             integration_parameters.prediction_distance(),
+             integration_parameters.dt,
+@@ -146,6 +149,7 @@ impl PhysicsPipeline {
+             events,
+             Some((soft_bodies, integration_parameters)),
+         );
++        lap = crate::counters::DiagLap::start();
+         narrow_phase.compute_intersections(
+             islands,
+             bodies,
+@@ -155,6 +159,7 @@ impl PhysicsPipeline {
+             events,
+         );
+ 
++        lap.lap(19);
+         self.counters.cd.ncontact_pairs = narrow_phase.contact_graph().graph.edges.len();
+         self.counters.cd.narrow_phase_time.pause();
+         self.counters.stages.collision_detection_time.pause();
+@@ -340,6 +345,7 @@ impl PhysicsPipeline {
+         // type-erased before the narrow-phase is mutably borrowed for the solver scope.
+         // SAFETY (used below): nothing mutates the narrow-phase while the solver runs.
+         let contact_color_masks = ErasedColorMasks::erase(narrow_phase.body_solver_color_masks());
++        let mut lap = crate::counters::DiagLap::start();
+ 
+         // Raw parts of the solver-facing manifold store, captured before the shared graph borrow
+         // below. SAFETY (used below): the contact graph is not mutated while the solvers run.
+@@ -348,6 +354,7 @@ impl PhysicsPipeline {
+         // step's changed contacts. The assemblies consume the buckets directly — nothing
+         // is collected, selected or sorted per step.
+         narrow_phase.maintain_solver_contact_graph(islands, bodies, colliders, multibody_joints);
++        lap.lap(20);
+         if !self.joint_selection_primed {
+             impulse_joints.invalidate_selection_memo();
+             self.joint_selection_primed = true;
+@@ -357,6 +364,7 @@ impl PhysicsPipeline {
+             bodies,
+             &mut self.joint_constraint_indices,
+         );
++        lap.lap(21);
+         self.counters
+             .stages
+             .island_constraints_collection_time

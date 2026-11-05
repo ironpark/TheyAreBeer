@@ -183,6 +183,12 @@ static float env_float(const char *name, float lo, float hi, float def)
 	return end != t && *end == 0 && v >= lo && v <= hi ? (float)v : def;
 }
 
+/* Sets an environment switch to def when unset, before the Rapier library reads it. */
+static void env_default(const char *name, const char *def)
+{
+	char t[16]; if (!GetEnvironmentVariableA(name, t, sizeof t)) SetEnvironmentVariableA(name, def);
+}
+
 /* ---------- loading the Rapier library from this DLL's folder (it is delay-loaded as rapier2d_ffi.dll) ---------- */
 /* rapier2d_ffi_avx2.dll and rapier2d_ffi_avx512.dll are the same library built for AVX2 + FMA and for AVX-512 (F, VL,
    BW, DQ, CD) on top (all with the 8-lane SIMD solver). The highest level the CPU and the OS support is used;
@@ -223,10 +229,14 @@ static DxWriteStatesFn g_write_states;   /* NULL: not in the loaded library, or 
 typedef R2Status (RAPIER_CALL *DxStepCountersFn)(const struct R2World *world, double *buffer, size_t capacity, size_t *count);
 static DxStepCountersFn g_step_counters;
 /* r2SolverDiag (rapier-solver-stats.patch): the parallel solver's barrier waits and serial overflow time, recorded while
-   RAPIER_SOLVER_DIAG is set. DX_SetOption(400) takes them (and resets them), 401 + k reads value k (times in us). */
+   RAPIER_SOLVER_DIAG is set, then the serial sections of the step (9-21: velocity assembly, narrow phase, constraint
+   collection), broad-phase pair adds / removals, solver-graph rebuilds / reconciled pairs (22-25) and solver-graph
+   sections (26-27), solver-graph rebuild causes (28-33: invalidated, epoch bumps by cause), body updates by kind (34-39), pair registration sections (40-47), pair add sections (48-50) and pool reuses (51). DX_SetOption(400) takes them (and resets them), 401 + k reads value k (times in us). */
+#define DX_NSDIAG 52
+#define DX_SDIAG_TIME(k) ((k) == 0 || (k) == 2 || (k) == 3 || ((k) >= 9 && (k) <= 21) || (k) == 26 || (k) == 27 || ((k) >= 40 && (k) <= 50))
 typedef R2Status (RAPIER_CALL *DxSolverDiagFn)(double *buffer, size_t capacity, size_t *count);
 static DxSolverDiagFn g_solver_diag;
-static double g_sdiag[9];
+static double g_sdiag[DX_NSDIAG];
 static int g_counters_want = -1, g_counters_on;
 static double g_cnt[DX_NCOUNTERS];
 /* The delay-load helper asks before loading rapier2d_ffi.dll: hand it the variant chosen above. */
@@ -252,11 +262,14 @@ static int load_rapier(void)
 	   threads; parking after 2,000 spins gave, with 60,000-90,000 zombies in the game, 4-6% shorter steps, lighter
 	   frames and logic, and a 3-6% faster game clock (r2Step +4% in the harness, with no other load). Set before the
 	   library reads it; RAPIER_SYNC_SPIN=0 keeps the spinning. */
-	{ char t[16]; if (!GetEnvironmentVariableA("RAPIER_SYNC_SPIN", t, sizeof t)) SetEnvironmentVariableA("RAPIER_SYNC_SPIN", "2000"); }
+	env_default("RAPIER_SYNC_SPIN", "2000");
 	/* rapier-solver-zorder.patch: solver bodies in Morton order every 16 steps and each color's contacts by body slot, for cache
 	   locality of the contact solve (0 turns either off) */
-	{ char t[16]; if (!GetEnvironmentVariableA("RAPIER_BODY_SORT", t, sizeof t)) SetEnvironmentVariableA("RAPIER_BODY_SORT", "16"); }
-	{ char t[16]; if (!GetEnvironmentVariableA("RAPIER_CONTACT_SORT", t, sizeof t)) SetEnvironmentVariableA("RAPIER_CONTACT_SORT", "1"); }
+	env_default("RAPIER_BODY_SORT", "16");
+	env_default("RAPIER_CONTACT_SORT", "1");
+	/* rapier-island-epoch.patch: body pose/velocity writes and new bodies no longer bump the active-set epoch, so the
+	   solver contact graph is not rebuilt from scratch every step (0 keeps Rapier's unconditional bump) */
+	env_default("RAPIER_STABLE_EPOCH", "1");
 	int level = env_int("DX_RAPIER_AVX2", 0, 1, 1) ? cpu_simd() : SIMD_BASE;
 	if (level == SIMD_AVX512 && !env_int("DX_RAPIER_AVX512", 0, 1, 1)) level = SIMD_AVX2;
 	static const wchar_t *const names[] = { L"rapier2d_ffi.dll", L"rapier2d_ffi_avx2.dll", L"rapier2d_ffi_avx512.dll" };
@@ -1758,8 +1771,8 @@ DX_EXPORT int DX_SetOption(int name, int value)
 	if (name >= 330 && name < 337) return (int)g_life[name - 330];
 	if (name >= 360 && name < 396) { int k = name - 360, f = k % 6; LONG64 v = g_qs[k / 6].v[f]; return (int)(f >= 1 && f <= 3 ? v / 1000 : v); }
 	if (name >= 340 && name < 353) { int k = name - 340; LONG64 v = g_lk[k]; return (int)(k < 8 && !(k & 1) ? v / 1000 : v); }
-	if (name == 400) { size_t n = 0; memset(g_sdiag, 0, sizeof g_sdiag); return g_solver_diag && g_solver_diag(g_sdiag, 9, &n) == R2_OK ? (int)n : -1; }
-	if (name >= 401 && name < 410) { int k = name - 401; return (int)(k == 0 || k == 2 || k == 3 ? g_sdiag[k] / 1000.0 : g_sdiag[k]); }
+	if (name == 400) { size_t n = 0; memset(g_sdiag, 0, sizeof g_sdiag); return g_solver_diag && g_solver_diag(g_sdiag, DX_NSDIAG, &n) == R2_OK ? (int)n : -1; }
+	if (name >= 401 && name < 401 + DX_NSDIAG) { int k = name - 401; return (int)(DX_SDIAG_TIME(k) ? g_sdiag[k] / 1000.0 : g_sdiag[k]); }
 	if (name == 356) { if (value >= 0) g_diag = value != 0; return g_diag; }   /* timed diagnostics on (1) / off (0) / ask (-1) */
 	if (name == 399) { memset(g_prof, 0, sizeof g_prof); memset(g_cnt, 0, sizeof g_cnt); memset(g_life, 0, sizeof g_life); for (int k = 0; k < 13; k++) InterlockedExchange64(&g_lk[k], 0); for (int k = 0; k < 36; k++) InterlockedExchange64(&g_qs[k / 6].v[k % 6], 0); return 0; }
 	if (name == 204)

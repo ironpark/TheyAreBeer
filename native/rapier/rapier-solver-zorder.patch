@@ -1,11 +1,12 @@
 diff --git a/src/counters/mod.rs b/src/counters/mod.rs
-index 02b64ac..03708ed 100644
+index 0bb8e30..65b3d62 100644
 --- a/src/counters/mod.rs
 +++ b/src/counters/mod.rs
-@@ -47,6 +47,36 @@ pub fn solver_diag_since(k: usize, start: Option<std::time::Instant>) {
-         SOLVER_DIAG[k].fetch_add(t.elapsed().as_nanos() as u64, core::sync::atomic::Ordering::Relaxed);
-     }
+@@ -63,6 +63,37 @@ pub fn solver_diag_since(k: usize, start: Option<std::time::Instant>) {
+ fn add_ns(k: usize, from: std::time::Instant, to: std::time::Instant) {
+     SOLVER_DIAG[k].fetch_add((to - from).as_nanos() as u64, core::sync::atomic::Ordering::Relaxed);
  }
++
 +/// TABPerf memory-order switches, read once from the environment: `RAPIER_BODY_SORT=<n>` reorders the
 +/// awake bodies along a Morton curve of their positions every `n` steps (0 or unset: never),
 +/// `RAPIER_CONTACT_SORT=1` sorts each parallel color's contacts by solver body slot.
@@ -40,10 +41,10 @@ index 02b64ac..03708ed 100644
  pub fn solver_diag_take() -> [u64; SOLVER_DIAG_COUNT] {
      core::array::from_fn(|k| SOLVER_DIAG[k].swap(0, core::sync::atomic::Ordering::Relaxed))
 diff --git a/src/dynamics/island_manager/substep_groups.rs b/src/dynamics/island_manager/substep_groups.rs
-index 27c1ac0..19f0e9b 100644
+index ce7ac22..d7fa859 100644
 --- a/src/dynamics/island_manager/substep_groups.rs
 +++ b/src/dynamics/island_manager/substep_groups.rs
-@@ -251,6 +251,87 @@ impl IslandManager {
+@@ -252,6 +252,87 @@ impl IslandManager {
      }
  }
  
@@ -132,10 +133,10 @@ index 27c1ac0..19f0e9b 100644
  /// The two bodies a touching pair couples: its first manifold's, or the colliders' parents
  /// for a pair of two soft surfaces.
 diff --git a/src/dynamics/solver/staged_island_solver/init.rs b/src/dynamics/solver/staged_island_solver/init.rs
-index a12c1a4..a3512a4 100644
+index 3879285..e791957 100644
 --- a/src/dynamics/solver/staged_island_solver/init.rs
 +++ b/src/dynamics/solver/staged_island_solver/init.rs
-@@ -329,16 +329,64 @@ impl StagedIslandSolver {
+@@ -332,16 +332,64 @@ impl StagedIslandSolver {
                  *next_chunk += refs.len().div_ceil(SIMD_WIDTH);
              };
  
@@ -207,10 +208,10 @@ index a12c1a4..a3512a4 100644
              }
  
 diff --git a/src/pipeline/physics_pipeline/solve.rs b/src/pipeline/physics_pipeline/solve.rs
-index 7ba3202..aed2065 100644
+index 4293dce..bded220 100644
 --- a/src/pipeline/physics_pipeline/solve.rs
 +++ b/src/pipeline/physics_pipeline/solve.rs
-@@ -329,6 +329,8 @@ impl PhysicsPipeline {
+@@ -334,6 +334,8 @@ impl PhysicsPipeline {
              multibody_joints,
              soft_bodies,
          );

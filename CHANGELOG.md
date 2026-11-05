@@ -168,6 +168,15 @@
 #### 추가
 - `native/rapier/rapier-solver-stats.patch`, 벤치 `s_*` 열: 병렬 솔버의 장벽 대기와 직렬 처리 시간(`RAPIER_SOLVER_DIAG=1`).
 
+### Rapier 직렬 구간
+
+#### 변경
+- `native/rapier/rapier-island-epoch.patch`: 게임이 매 단계 몸체 상태를 써 넣을 때마다 Rapier가 활성 집합 세대를 올려 솔버 접촉 그래프를 매 단계 처음부터 다시 만들던 것을, 소속이 바뀔 때만 올리게 했습니다(래퍼 기본 켬, `RAPIER_STABLE_EPOCH=0`으로 끔). 새 몸체는 몸체 표에 항목만 더합니다. 좀비 10만에서 그래프 유지가 6.1 ms에서 2.0 ms로 줄었습니다. 결과는 비트 단위로 같지 않지만 벽 밖으로 밀리는 몸체는 늘지 않았습니다. ([상세](docs/DEVELOPMENT.md#직렬-구간-솔버-그래프와-쌍-등록))
+- `native/rapier/rapier-pair-prefetch.patch`: 넓은 범위 쌍 추가·삭제를 처리할 때 몇 이벤트 앞의 충돌체·그래프 데이터를 미리 읽습니다. 쌍 등록이 진단 기준 14.0 ms에서 9.9 ms로 줄었고 결과는 같습니다.
+
+#### 추가
+- `native/rapier/rapier-solver-stats.patch`, 벤치 `s_*` 열: 속도 조립·좁은 범위·섬 제약 수집의 하위 구간 시간, 쌍 이벤트 수, 솔버 그래프 재구성 원인(`RAPIER_SOLVER_DIAG=1`).
+
 ### 그리기와 웨이브 표시 (`mod/`)
 
 좀비 8만 마리 이상에서 프레임이 108.0 ms에서 97.3 ms로, 게임 시간이 0.67에서 0.72로 빨라졌습니다(실제 게임, 설정마다 1회). ([상세](docs/DEVELOPMENT.md#그리기와-웨이브-표시))
@@ -192,6 +201,13 @@
 - `scripts\install.ps1 -Dxvk on|off`: DXVK 공식 릴리스 3.1.1을 받아 SHA-256을 확인하고 64비트 `d3d9.dll`을 넣거나 뺍니다.
 - 벤치 `engine` 열과 로그에 DXVK 사용 여부(`+ DXVK`)를 남깁니다.
 - 측정(Rapier): 6만 마리 이상에서 프레임 4~7% 단축, 게임 시간·CPU는 거의 같음. 좀비가 적을 때는 FPS와 CPU 사용량이 늘어 기본은 꺼짐입니다. ([README](README.md#dxvk))
+
+### 로직 따라잡기 (`mod/`)
+
+#### 변경
+- 프레임이 66.7 ms보다 길면 게임 로직이 프레임 길이만큼(최대 4틱) 따라잡을 때까지 게임 시계를 세우지 않습니다. 원작은 로직이 2틱 밀리면 시계를 세워, 느린 프레임에서는 로직이 프레임당 2틱만 돌았습니다. 실제 게임(Rapier, 4회씩)에서 게임 시간이 6~8만 0.95 → 1.01, 8~10만 0.80 → 0.87, 10만 이상 0.67 → 0.74로 빨라졌습니다. `engine.json`의 `"logicMaxLag": 1`(또는 `TABPERF_LOGIC_LAG=1`)이면 원작 규칙입니다. ([상세](docs/DEVELOPMENT.md#로직-따라잡기))
+- 벤치에 `l_lag` 열(그때의 허용 틱 수)을 더했습니다.
+- 측정 도구 `TABPERF_TICKPROF=1|full`: 로직 틱 안의 시스템·컴포넌트 갱신을 메서드별로 재어 로그에 남깁니다. 10만 마리에서 틱 15 ms 중 시스템은 0.5 ms이고 나머지는 엔티티 갱신이며, 그 CPU 시간의 29%가 행동 트리(`CBehaviour`), 14%가 이동(`CMovable`)이었습니다. `full`은 행동 트리 잎 노드와 `CMovable` 단계까지 잽니다. ([상세](docs/DEVELOPMENT.md#로직-틱-내부))
 
 ### 모드 소스 구성
 

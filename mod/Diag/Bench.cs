@@ -153,6 +153,7 @@ namespace Billions
             {
                 Row("end");
                 PostProf.Dump();
+                TickProf.Dump();
                 if (PhysicsRedirect.Module != IntPtr.Zero)
                     Log.Info("bench: 게임 폴더 물리 DLL " + (PhysicsRedirect.GameDllLoaded() ? "도 올라와 있다(게임 시작 때 확인 호출 등)" : "은 올라오지 않았다 — 모든 물리 호출이 모드 쪽으로 갔다"));
                 Log.Info("bench: 자동 시험 끝 — 게임 종료");
@@ -251,6 +252,7 @@ namespace Billions
                     if (adapt >= 0) Log.Info("bench: Rapier 하위 단계 " + (adapt > 0 ? "자동 " + adapt / 100 + "~" + adapt % 100 : "고정"));
                 }
                 int zombies = 0; foreach (var z in DXGame.Current.EntitiesOfType<Zombie>()) zombies++;
+                if (TickProf.On && note.Length == 0) try { TickProf.Frame(zombies); } catch (Exception e) { Log.Error("tickprof frame", e); }
                 long steps = 0, st = 0, sm = 0, frames = 0, ft = 0, fm = 0;
                 bool tick = note.Length == 0;   // a marker row (note) leaves the running second alone
                 if (tick)
@@ -302,7 +304,7 @@ namespace Billions
                         + "," + (tasks > 0 ? delayMs / tasks : 0).ToString("0.00", c) + "," + (tasks > 0 ? taskMs / tasks : 0).ToString("0.00", c)
                         + "," + Interlocked.Exchange(ref LogicProf.TicksRun, 0).ToString(c) + "," + Interlocked.Exchange(ref LogicProf.IdleTasks, 0).ToString(c)
                         + "," + (Interlocked.Exchange(ref LogicProf.BlockIaUs, 0) / 1000.0).ToString("0", c) + "," + (Interlocked.Exchange(ref LogicProf.BlockPhysUs, 0) / 1000.0).ToString("0", c)
-                        + "," + (Interlocked.Exchange(ref LogicProf.RunUs, 0) / 1000.0).ToString("0", c);
+                        + "," + (Interlocked.Exchange(ref LogicProf.RunUs, 0) / 1000.0).ToString("0", c) + "," + SmoothTime.LogicLag.ToString(c);
                     // the whole process's CPU time this second, in cores (all threads: game, render, logic, physics workers)
                     long wall = Stopwatch.GetTimestamp(); double cpu;
                     using (var pr = Process.GetCurrentProcess()) cpu = pr.TotalProcessorTime.TotalMilliseconds;
@@ -321,6 +323,17 @@ namespace Billions
                     game += "," + (sd > 8 ? PerfMod.PhysOpt(401, 0) / 1000.0 : 0).ToString("0", c) + "," + (sd > 8 ? PerfMod.PhysOpt(404, 0) / 1000.0 : 0).ToString("0", c)
                         + "," + (sd > 8 ? PerfMod.PhysOpt(402, 0) : 0).ToString(c) + "," + (sd > 8 ? PerfMod.PhysOpt(403, 0) / 1000.0 : 0).ToString("0.0", c);
                     for (int k = 405; k <= 408; k++) game += "," + (solves > 0 ? PerfMod.PhysOpt(k, 0) / (double)solves : 0).ToString("0.0", c);
+                    // per solve (DX_SetOption 410-428): serial sections in ms (velocity assembly, narrow phase, constraint collection),
+                    // broad-phase pair adds / removals, solver-graph full rebuilds / pairs fully updated, solver-graph sections in ms,
+                    // rebuild causes (graph invalidated; active-set epoch bumps: body updated, removed, slept, woken, substep groups),
+                    // body updates (fixed, sleep flag, type or enabled, new, colliders / mass / dominance, all), pair registration
+                    // sections in ms (adds; removals: lookups, find & unlink, solver graph, swap-remove, moved edge, islands, rest),
+                    // pair add sections in ms (graph indices, edge lookup, pair from pool or new), pairs taken from the pool
+                    for (int i = 0; i < SolverDiagCols.Length; i++)
+                    {
+                        int k = 410 + i; bool ms = SolverDiagCols[i].EndsWith("_ms");
+                        game += "," + (solves > 0 && sd > k - 401 ? PerfMod.PhysOpt(k, 0) / (ms ? 1000.0 : 1.0) / solves : 0).ToString(ms ? "0.00" : "0.###", c);
+                    }
                     // queries by kind (DX_SetOption 360 + kind * 6 + field): calls, total ms, ms waiting for the index lock,
                     // ms in the game's callbacks, index entries looked at and hits per call
                     for (int q = 0; q < 6; q++)
@@ -352,7 +365,7 @@ namespace Billions
                     steps.ToString(c), (steps > 0 ? Ms(st) / steps : 0).ToString("0.00", c), Ms(sm).ToString("0.00", c),
                     zombies.ToString(c), note, sections, game);
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(CsvPath)));
-                if (!_header && !File.Exists(CsvPath)) File.AppendAllText(CsvPath, "time,engine,paused,frames,frame_avg_ms,frame_max_ms,phys_steps,step_avg_ms,step_max_ms,zombies,note,r_push_ms,r_step_ms,r_pull_ms,r_pairs_ms,r_index_ms,r_substeps,r_contact_pairs," + StageHeader + ",g_postmethods_ms,g_pre_ms,g_post_ms,g_syncwait_ms,g_logicwait_ms,g_ia_per_s,g_ia_ms,n_create_per_s,n_create_us,n_settype_per_s,n_settype_us,n_insert_us,n_collider_us,n_indexwait_ms,g_update_ms,g_speed,g_phys_usage,g_ia_usage,g_clock_rate,l_calls,l_wait_ms,l_tasks,l_start_ms,l_task_ms,l_ticks,l_idle,l_block_ia_ms,l_block_phys_ms,l_run_ms,g_cpu_cores" + CallHeader + ",n_pending,n_ray_diff,n_ray_tie,n_catset,s_wait_ms,s_run_ms,s_waits,s_overflow_ms,s_colors,s_overflow_chunks,s_chunks,s_workers" + QueryHeader + "\r\n");
+                if (!_header && !File.Exists(CsvPath)) File.AppendAllText(CsvPath, "time,engine,paused,frames,frame_avg_ms,frame_max_ms,phys_steps,step_avg_ms,step_max_ms,zombies,note,r_push_ms,r_step_ms,r_pull_ms,r_pairs_ms,r_index_ms,r_substeps,r_contact_pairs," + StageHeader + ",g_postmethods_ms,g_pre_ms,g_post_ms,g_syncwait_ms,g_logicwait_ms,g_ia_per_s,g_ia_ms,n_create_per_s,n_create_us,n_settype_per_s,n_settype_us,n_insert_us,n_collider_us,n_indexwait_ms,g_update_ms,g_speed,g_phys_usage,g_ia_usage,g_clock_rate,l_calls,l_wait_ms,l_tasks,l_start_ms,l_task_ms,l_ticks,l_idle,l_block_ia_ms,l_block_phys_ms,l_run_ms,l_lag,g_cpu_cores" + CallHeader + ",n_pending,n_ray_diff,n_ray_tie,n_catset,s_wait_ms,s_run_ms,s_waits,s_overflow_ms,s_colors,s_overflow_chunks,s_chunks,s_workers," + string.Join(",", SolverDiagCols) + QueryHeader + "\r\n");
                 _header = true;
                 File.AppendAllText(CsvPath, line + "\r\n");
             }
@@ -360,6 +373,8 @@ namespace Billions
         }
         // Rapier stage counters in the CSV: DX_SetOption(310 + k) index, column name
         static readonly int[] Stages = { 0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17, 19 };
+        // r2SolverDiag values 9.. (DX_SetOption 410..), one column each: "_ms" columns are times, the rest counts
+        static readonly string[] SolverDiagCols = "s_va_prep_ms,s_va_joints_ms,s_va_layout_ms,s_va_buffers_ms,s_va_stats_ms,s_np_user_ms,s_np_register_ms,s_np_candidates_ms,s_np_update_ms,s_np_transitions_ms,s_np_intersections_ms,s_col_graph_ms,s_col_joints_ms,s_bp_adds,s_bp_removes,s_graph_rebuilds,s_graph_dirty,s_graph_bodies_ms,s_graph_buckets_ms,s_graph_invalid,s_epoch_updated,s_epoch_removed,s_epoch_slept,s_epoch_woken,s_epoch_groups,s_upd_fixed,s_upd_sleep,s_upd_type,s_upd_new,s_upd_shape,s_upd_all,s_add_ms,s_rm_lookup_ms,s_rm_unlink_ms,s_rm_graph_ms,s_rm_swap_ms,s_rm_moved_ms,s_rm_islands_ms,s_rm_rest_ms,s_add_index_ms,s_add_find_ms,s_add_new_ms,s_add_pooled".Split(',');
         const string StageHeader = "rs_total_ms,rs_user_ms,rs_update_ms,rs_bp_ms,rs_bp_final_ms,rs_np_ms,rs_island_ms,rs_collect_ms,rs_solver_ms,rs_vassembly_ms,rs_vsolve_ms,rs_vupdate_ms,rs_writeback_ms,rs_ccd_ms,rs_pairs,rs_contacts";
         static double Ms(long ticks) { return ticks * 1000.0 / Stopwatch.Frequency; }
     }

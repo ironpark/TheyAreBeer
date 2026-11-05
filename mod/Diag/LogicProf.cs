@@ -16,6 +16,7 @@ namespace Billions
     public static class LogicProf
     {
         public static long Calls, CallTicks, Tasks, TaskTicks, StartDelayTicks, TicksRun, IdleTasks, BlockIaUs, BlockPhysUs, RunUs;
+        public static long TaskTicksAll;   // never reset (TickProf)
         static long _postAt; static long _iaAtStart;
         [ThreadStatic] static long _t0;
 
@@ -49,7 +50,7 @@ namespace Billions
         static void TaskPost(DXGame __instance)
         {
             long d = Stopwatch.GetTimestamp() - _t0, n = __instance.IAIteration - _iaAtStart;
-            Interlocked.Increment(ref Tasks); Interlocked.Add(ref TaskTicks, d); Interlocked.Add(ref TicksRun, n);
+            Interlocked.Increment(ref Tasks); Interlocked.Add(ref TaskTicks, d); if (TickProf.On) Interlocked.Add(ref TaskTicksAll, d); Interlocked.Add(ref TicksRun, n);
             if (n == 0) Interlocked.Increment(ref IdleTasks);
         }
 

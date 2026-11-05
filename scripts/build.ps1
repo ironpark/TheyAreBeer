@@ -53,8 +53,11 @@ function Build-Harness {
 #                                 and value
 #   rapier-c-step-counters.patch  r2StepCounters: the pipeline's stage times of the last step (profiler feature;
 #                                 off until r2SetCountersEnabled)
+#   rapier-island-epoch.patch     body state writes and new bodies keep the active-set epoch (RAPIER_STABLE_EPOCH), so the
+#                                 solver contact graph is not rebuilt from scratch every step
+#   rapier-pair-prefetch.patch    broad-phase pair events prefetch the colliders / graph data of the events a few ahead
 #   rapier-solver-park.patch      parallel solver workers sleep after RAPIER_SYNC_SPIN spins instead of spinning
-#   rapier-solver-stats.patch     parallel solver barrier wait / overflow diagnostics (RAPIER_SOLVER_DIAG)
+#   rapier-solver-stats.patch     parallel solver barrier wait / overflow and serial section diagnostics (RAPIER_SOLVER_DIAG)
 #   rapier-solver-zorder.patch    solver bodies in Morton order of position, contacts sorted by body within a color
 # The Rust side is built with fat LTO and one codegen unit. CMake's integration tests (ctest) then check the library.
 # DXPhysicsNative.dll is MSVC C only, so dx_text_pad still sits at the start of .text (TABModLoader patches base + 0x13B3);

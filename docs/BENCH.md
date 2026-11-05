@@ -157,6 +157,20 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `s_overflow_ms` | 작업 스레드 0이 혼자 푼 넘침 제약 시간(ms) |
 | `s_colors`, `s_overflow_chunks`, `s_chunks`, `s_workers` | 풀이 한 번의 색 수, 넘침 묶음 수, 묶음 수, 작업 스레드 수(평균) |
 
+아래는 모두 단계(풀이) 하나 기준 평균이고, 시간은 ms입니다. 구간마다 시계를 읽어 그 자체로 시간이 조금 늘어납니다(쌍 등록 구간은 약 1.9배).
+
+| 열 | 뜻 |
+| --- | --- |
+| `s_va_prep_ms`, `s_va_joints_ms`, `s_va_layout_ms`, `s_va_buffers_ms`, `s_va_stats_ms` | 속도 조립: 버퍼·솔버 몸체, 관절, 묶음 배치(접촉 정렬 포함), 제약 버퍼·일반 제약, 카운터 통계(Rapier 카운터를 켰을 때만) |
+| `s_np_user_ms`, `s_np_register_ms`, `s_np_candidates_ms`, `s_np_update_ms`, `s_np_transitions_ms`, `s_np_intersections_ms` | 좁은 범위: 사용자 변경, 쌍 등록, 깨어 있는 몸체 표시·갱신 후보, 쌍 갱신(병렬), 접촉 시작·끝 반영, 센서 겹침 |
+| `s_col_graph_ms`, `s_col_joints_ms` | 섬 제약 수집: 솔버 접촉 그래프 유지, 관절 |
+| `s_bp_adds`, `s_bp_removes` | 넓은 범위가 낸 쌍 추가·삭제 이벤트 수 |
+| `s_graph_rebuilds`, `s_graph_dirty`, `s_graph_bodies_ms`, `s_graph_buckets_ms` | 솔버 그래프 전체 재구성 횟수, 이번 단계에 바뀐 쌍 수, 몸체 표, 버킷 갱신 |
+| `s_graph_invalid`, `s_epoch_updated`, `s_epoch_removed`, `s_epoch_slept`, `s_epoch_woken`, `s_epoch_groups` | 재구성 원인: 그래프 무효화, 세대를 올린 몸체 갱신·몸체 제거·잠들기·깨어나기·하위 단계 그룹 |
+| `s_upd_fixed`, `s_upd_sleep`, `s_upd_type`, `s_upd_new`, `s_upd_shape`, `s_upd_all` | 몸체 갱신 종류(겹쳐 셈): 고정 몸체, 잠들기 표시, 타입·켜기 변경, 새 몸체, 충돌체·질량·우선도 변경, 전체 |
+| `s_add_ms`, `s_add_index_ms`, `s_add_find_ms`, `s_add_new_ms`, `s_add_pooled` | 쌍 추가 전체, 그래프 인덱스, 노드·간선 찾기, 쌍 만들기, 재사용 풀에서 꺼낸 수 |
+| `s_rm_lookup_ms`, `s_rm_unlink_ms`, `s_rm_graph_ms`, `s_rm_swap_ms`, `s_rm_moved_ms`, `s_rm_islands_ms`, `s_rm_rest_ms` | 쌍 삭제: 조회, 간선 찾기·연결 해제, 솔버 그래프·힘 이벤트 목록, 간선 배열 swap-remove, 옮겨진 간선 고치기, 섬 연결, 색·깨우기·재사용 |
+
 ### 공간 질의 (`q_*`)
 
 종류(`area` 영역, `radius` 반경, `fast` 반경 배열, `near` 가장 가까운 몸체, `ray` 레이캐스트, `space` 남은 공간)마다 그 1초 기준입니다(Rapier 판만). 이 열과 `n_angle_*`~`n_sensor_*`는 질의·호출마다 시계를 읽어서 평소에는 꺼져 있고, 벤치를 돌릴 때만 켜집니다(`DX_SetOption(356, 1)`).
@@ -177,6 +191,7 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `l_tasks`, `l_start_ms`, `l_task_ms` | 로직 작업 수, 시작 지연 평균, 실행 시간 평균 |
 | `l_ticks`, `l_idle` | 처리한 로직 틱 수, 틱 없이 끝난 작업 수 |
 | `l_block_ia_ms`, `l_block_phys_ms`, `l_run_ms` | 게임 시계 루프가 로직 지연·물리 지연으로 멈춘 시간과 흐른 시간(ms). 모드의 빠른 타이머 루프에서만 값이 있음 |
+| `l_lag` | 그 순간 게임 시계가 로직보다 앞설 수 있는 틱 수(1이 원작, 프레임이 길면 `logicMaxLag`까지) |
 
 ## 실험용 환경 변수
 
@@ -193,6 +208,7 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `DX_RAPIER_CCD` | `0`이면 연속 충돌 검사 끔 |
 | `RAPIER_BODY_SORT`, `RAPIER_CONTACT_SORT` | 솔버 몸체 Morton 정렬 주기(기본 16), 색 안 접촉 정렬(기본 1). `0`이면 끔 |
 | `RAPIER_SOLVER_DIAG` | 있으면 병렬 솔버 진단을 기록(`s_*` 열) |
+| `RAPIER_STABLE_EPOCH` | `0`이면 몸체 갱신마다 활성 집합 세대를 올려 솔버 접촉 그래프를 매 단계 다시 만듦(Rapier 원래 동작, 기본 `1`) |
 | `DX_RAPIER_RAYSIMD` | `0`이면 레이캐스트 후보 검사에 AVX2를 쓰지 않음 |
 | `DX_RAPIER_RAYWALK` | `0`이면 레이캐스트를 예전처럼 선분 상자 전체로 찾음, `2`면 두 방식을 함께 돌려 결과 차이를 셈(`n_ray_*`) |
 | `DX_RAPIER_SOFTCCD` | soft CCD 거리(기본 0, 끔) |
@@ -202,8 +218,10 @@ Remove-Item Env:DX_RAPIER_ITERATIONS
 | `DX_RAPIER_PGS`, `DX_RAPIER_STAB` | 하위 단계 안의 PGS·안정화 반복 수 |
 | `DX_RAPIER_SLOP`, `DX_RAPIER_PREDICT`, `DX_RAPIER_RECYCLE`, `DX_RAPIER_MAXCORR`, `DX_RAPIER_WARMSTART` | Rapier 접촉 파라미터 |
 | `TABPERF_FASTTIMING` | `0`이면 게임 옵션 FastTimming을 따름(모드 기본은 옵션과 상관없이 빠른 타이머) |
+| `TABPERF_LOGIC_LAG` | `engine.json`의 `logicMaxLag`와 같음. `1`이면 원작처럼 로직이 2틱 밀릴 때 시계를 세움(기본 3) |
 | `TABPERF_SUCS` | `0`이면 물리 호출의 권한 검사 생략을 끔 |
 | `TABPERF_FASTBODY` | `0`이면 Rapier 몸체 값 직접 접근을 끔 |
+| `TABPERF_TICKPROF` | `1`이면 로직 틱 안의 시스템·컴포넌트 갱신을 메서드별로 재어 20초마다와 시험 끝에 로그에 `tickprof` 줄로 남김. `full`이면 엔티티의 `OnUpdate` 재정의, `CMovable` 단계, 행동 트리 잎 노드도 잼(틱이 약 25% 길어짐) |
 | `TABPERF_POSTPROF` | `1`이면 물리 대기 작업을 메서드별로 재어, 시험이 끝날 때 로그에 `postprof:` 줄로 남김 |
 | `TABPERF_SWARMFAST`, `TABPERF_DEVICECHECK`, `TABPERF_FASTREMOVE`, `TABPERF_FASTDRAW` | `0`이면 웨이브 미니맵 표시·D3D 장치 확인·루트 목록 지우기·단순 스프라이트 손질을 끔|
 | `TABPERF_DXVK`, `TABPERF_DXVK_FPS` | `engine.json`의 `dxvk`·`dxvkMaxFps`와 같음. `1`이면 모드 폴더의 `dxvk\d3d9.dll`(DXVK)을 씀, 그때 `engine` 열과 로그에 `+ DXVK`가 붙음 |

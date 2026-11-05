@@ -1,0 +1,113 @@
+diff --git a/src/data/arena.rs b/src/data/arena.rs
+index 3465984..5be11b5 100644
+--- a/src/data/arena.rs
++++ b/src/data/arena.rs
+@@ -463,6 +463,15 @@ impl<T> Arena<T> {
+         }
+     }
+ 
++    /// TABPerf: prefetches the first `LINES + 1` cache lines of the slot of `i`, without reading
++    /// it (no-op when out of range).
++    #[inline]
++    pub(crate) fn prefetch<const LINES: usize>(&self, i: Index) {
++        if (i.index as usize) < self.items.len() {
++            crate::utils::prefetch_read::<LINES, _>(unsafe { self.items.as_ptr().add(i.index as usize) });
++        }
++    }
++
+     /// Get an exclusive reference to the element at index `i` if it is in the
+     /// arena.
+     ///
+diff --git a/src/data/coarena.rs b/src/data/coarena.rs
+index 85e3826..131a5c6 100644
+--- a/src/data/coarena.rs
++++ b/src/data/coarena.rs
+@@ -65,6 +65,15 @@ impl<T> Coarena<T> {
+         }
+     }
+ 
++    /// TABPerf: prefetches the slot of `index`, without reading it (no-op when out of range).
++    #[inline]
++    pub(crate) fn prefetch(&self, index: Index) {
++        let i = index.into_raw_parts().0 as usize;
++        if i < self.data.len() {
++            crate::utils::prefetch_read::<0, _>(unsafe { self.data.as_ptr().add(i) });
++        }
++    }
++
+     /// Gets a specific element from the coarena, if it exists.
+     pub fn get(&self, index: Index) -> Option<&T> {
+         let (i, g) = index.into_raw_parts();
+diff --git a/src/data/graph.rs b/src/data/graph.rs
+index e08f080..425e5a0 100644
+--- a/src/data/graph.rs
++++ b/src/data/graph.rs
+@@ -541,6 +541,28 @@ impl<N, E> Graph<N, E> {
+         None
+     }
+ 
++    /// TABPerf: prefetches node `a` (no-op when out of range).
++    #[inline]
++    pub(crate) fn prefetch_node(&self, a: NodeIndex) {
++        if a.index() < self.nodes.len() {
++            crate::utils::prefetch_read::<0, _>(unsafe { self.nodes.as_ptr().add(a.index()) });
++        }
++    }
++
++    /// TABPerf: prefetches the list links of the first edges of node `a`'s two lists (reads the
++    /// node, which should be prefetched beforehand).
++    #[inline]
++    pub(crate) fn prefetch_list_heads(&self, a: NodeIndex) {
++        if let Some(node) = self.nodes.get(a.index()) {
++            for e in node.next {
++                if e.index() < self.edges.len() {
++                    let edge = unsafe { self.edges.as_ptr().add(e.index()) };
++                    crate::utils::prefetch_read::<0, _>(unsafe { &raw const (*edge).next });
++                }
++            }
++        }
++    }
++
+     /// Access the internal node array.
+     pub fn raw_nodes(&self) -> &[Node<N>] {
+         &self.nodes
+diff --git a/src/geometry/narrow_phase/pair_management.rs b/src/geometry/narrow_phase/pair_management.rs
+index 2eb99b2..c09e2f8 100644
+--- a/src/geometry/narrow_phase/pair_management.rs
++++ b/src/geometry/narrow_phase/pair_management.rs
+@@ -675,7 +675,34 @@ impl NarrowPhase {
+         broad_phase_events: &[BroadPhasePairEvent],
+         events: &dyn EventHandler,
+     ) {
+-        for event in broad_phase_events {
++        // TABPerf: each event starts with cold reads (the two colliders, their graph indices,
++        // their graph nodes, then the first links of the nodes' edge lists), each depending on
++        // the previous; the events are independent, so these are prefetched a few events ahead
++        // in three stages. Prefetches only: the order and effect of the events are unchanged.
++        const AHEAD: usize = 12;
++        // The two colliders of event `j` (none past the end).
++        let colliders_of = |j: usize| {
++            broad_phase_events.get(j).into_iter().flat_map(|e| match e {
++                BroadPhasePairEvent::AddPair(p) | BroadPhasePairEvent::DeletePair(p) => {
++                    [p.collider1, p.collider2]
++                }
++            })
++        };
++        for (i, event) in broad_phase_events.iter().enumerate() {
++            for h in colliders_of(i + AHEAD) {
++                colliders.colliders.prefetch::<2>(h.0);
++                self.graph_indices.prefetch(h.0);
++            }
++            for h in colliders_of(i + AHEAD * 2 / 3) {
++                if let Some(gid) = self.graph_indices.get(h.0) {
++                    self.contact_graph.graph.prefetch_node(gid.contact_graph_index);
++                }
++            }
++            for h in colliders_of(i + AHEAD / 3) {
++                if let Some(gid) = self.graph_indices.get(h.0) {
++                    self.contact_graph.graph.prefetch_list_heads(gid.contact_graph_index);
++                }
++            }
+             match event {
+                 BroadPhasePairEvent::AddPair(pair) => {
+                     self.add_pair(colliders, pair);

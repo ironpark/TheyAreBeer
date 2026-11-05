@@ -52,8 +52,11 @@ namespace Billions
             // loop, with real elapsed time) is used either way; engine.json "fastTiming": false or TABPERF_FASTTIMING=0
             // keeps the game's choice. The option itself is not changed.
             bool hpt = g.Configuration.HighPerformanceTiming;
-            if (!hpt && !Settings.Bool(Settings.Config(), "fastTiming", "TABPERF_FASTTIMING", true)) return true;
+            var cfg = Settings.Config();
+            if (!hpt && !Settings.Bool(cfg, "fastTiming", "TABPERF_FASTTIMING", true)) return true;
             if (!hpt) Log.Info("smooth time: 게임 옵션 FastTimming 이 꺼져 있지만 빠른 타이머 루프를 쓴다(engine.json fastTiming)");
+            _maxLag = Math.Max(1, Math.Min(6, Settings.Int(cfg, "logicMaxLag", "TABPERF_LOGIC_LAG", 3)));
+            OnLevelUnloaded();
             Task started = null; bool threadStarted = false;
             try
             {
@@ -63,7 +66,8 @@ namespace Billions
                 _task(g) = started;
                 var t = new Thread(() => PhysicsLoop(g));
                 _thread(g) = t; t.Start(); threadStarted = true;
-                Log.Info("smooth time: 게임 시간 작업 시작(" + (Accurate ? "실제 경과 시간" : "원작 4 ms") + ")");
+                Log.Info("smooth time: 게임 시간 작업 시작(" + (Accurate ? "실제 경과 시간" : "원작 4 ms")
+                    + (_maxLag > 1 ? ", 로직 따라잡기 최대 " + (_maxLag + 1) + "틱/프레임" : ", 로직 2틱 제한(원작)") + ")");
                 return false;
             }
             catch (Exception e)
@@ -83,6 +87,32 @@ namespace Billions
                 return true;
             }
         }
+
+        // How many 33.3 ms logic ticks the clock may run ahead of the logic. The render loop starts one logic task per frame
+        // (DXGame.UpdateGameLogic) and the task runs every tick that is due, but the game's clock stops at two ticks behind,
+        // so with frames longer than 66.7 ms the logic gets two ticks per frame and sets the game speed (9.4 FPS: 19 ticks
+        // a second, 0.63x, at 100,000 zombies, while physics alone would allow 0.73x). The limit follows the frame time:
+        // ceil(frame / 33.3) - 1 ticks, so frames up to 66.7 ms keep the game's 1 and only slower ones let a task catch up
+        // the ticks of its frame, up to "logicMaxLag" in engine.json (TABPERF_LOGIC_LAG, default 3; 1 = the game's rule).
+        // Every tick still runs with the same 33.3 ms of game time; only more of them run per frame.
+        internal static volatile int LogicLag = 1;
+        static int _maxLag = 1;
+        static long _frameAt; static double _frameMs;
+
+        // every level frame (PerfHooks.OnStartFrame), on the render thread
+        internal static void Frame()
+        {
+            long now = Stopwatch.GetTimestamp();
+            if (_frameAt != 0 && _maxLag > 1)
+            {
+                double ms = Math.Min(1000.0, (now - _frameAt) * 1000.0 / Stopwatch.Frequency);
+                _frameMs = _frameMs > 0 ? _frameMs * 0.8 + ms * 0.2 : ms;
+                LogicLag = Math.Max(1, Math.Min(_maxLag, (int)Math.Ceiling(_frameMs / 33.333333333333336 - 0.01) - 1));
+            }
+            _frameAt = now;
+        }
+
+        internal static void OnLevelUnloaded() { _frameAt = 0; _frameMs = 0; LogicLag = 1; }
 
         static int _periodSet;
         static void BeginTimerPeriodOnce()
@@ -125,8 +155,9 @@ namespace Billions
                         if (num4 > num3) num3 = Math.Min(num4, num3 * f); else if (num4 < num3) num3 = Math.Max(num4, num3 / f);
                         double num5 = g.GameSpeed * num3;
                         int physLag = (int)((g.GameTime - DXPhysicWorld.LastGameTimeUpdatePhysics) / 83.333333333333329), iaLag = (int)((g.GameTime - DXGame.LastGameTimeIAUpdate) / 33.333332061767578);
-                        LogicProf.Gate(dt, iaLag > 1, physLag > 1);
-                        if (Math.Max(physLag, iaLag) <= 1)
+                        int iaMax = LogicLag;
+                        LogicProf.Gate(dt, iaLag > iaMax, physLag > 1);
+                        if (physLag <= 1 && iaLag <= iaMax)
                             g.GameTime += num5 * dt;
                     }
                 }

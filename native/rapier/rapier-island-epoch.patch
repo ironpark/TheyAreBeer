@@ -1,0 +1,167 @@
+diff --git a/src/dynamics/island_manager/manager.rs b/src/dynamics/island_manager/manager.rs
+index c80e1b4..cc04b43 100644
+--- a/src/dynamics/island_manager/manager.rs
++++ b/src/dynamics/island_manager/manager.rs
+@@ -48,6 +48,11 @@ pub struct IslandManager {
+     /// The persistent islands: connected components of the touching-contact/joint
+     /// graph, maintained incrementally.
+     pub(crate) persistent: super::PersistentIslands,
++    /// TABPerf (RAPIER_STABLE_EPOCH): new bodies appended to the awake island without an epoch
++    /// bump, in order. Cleared by [`Self::bump_active_set_epoch`]; the narrow phase adds the ones
++    /// it has not seen yet to its body table (see `maintain_solver_contact_graph`).
++    #[cfg_attr(feature = "serde-serialize", serde(skip))]
++    pub(crate) appended_active_bodies: Vec<RigidBodyHandle>,
+ }
+ 
+ impl IslandManager {
+@@ -59,6 +64,7 @@ impl IslandManager {
+     #[inline]
+     pub(crate) fn bump_active_set_epoch(&mut self) {
+         self.active_set_epoch = self.active_set_epoch.wrapping_add(1);
++        self.appended_active_bodies.clear();
+     }
+ 
+     pub(crate) fn rigid_body_removed_or_disabled(
+@@ -299,7 +305,28 @@ impl IslandManager {
+         handle: RigidBodyHandle,
+         bodies: &mut RigidBodySet,
+     ) {
+-        self.bump_active_set_epoch();
++        // TABPerf (RAPIER_STABLE_EPOCH): bump only when this call can change existing active-set
++        // slots or their dynamic flags. Pose, velocity, sleep-flag, collider, mass and dominance
++        // changes keep the epoch-keyed caches (solver contact graph, body table, joint selection)
++        // valid: a wake-up that merges islands bumps the epoch itself, and fixed bodies are never
++        // in the active set. A new body joining the awake island takes the next slot, leaving the
++        // others in place: it is listed in `appended_active_bodies` for the body table instead.
++        // Bumping anyway forced a full solver-graph rebuild on every step a game writes body
++        // states or adds a body.
++        let appended = match bodies.get(handle) {
++            Some(rb) if stable_epoch_on() && rb.is_enabled() => {
++                if !rb.is_fixed() && rb.ids.active_island_id == u32::MAX {
++                    (!rb.is_sleeping() && self.awake_island.is_some()).then_some(true)
++                } else {
++                    let structural = RigidBodyChanges::TYPE | RigidBodyChanges::ENABLED_OR_DISABLED;
++                    (!rb.changes.intersects(structural)).then_some(false)
++                }
++            }
++            _ => None,
++        };
++        if appended.is_none() {
++            self.bump_active_set_epoch();
++        }
+         let Some(rb) = bodies.get_mut(handle) else {
+             return;
+         };
+@@ -320,6 +347,9 @@ impl IslandManager {
+                     rb.ids.active_island_id = id as u32;
+                     rb.ids.active_set_id = (target_island.bodies.len()) as u32;
+                     target_island.bodies.push(handle);
++                    if appended == Some(true) {
++                        self.appended_active_bodies.push(handle);
++                    }
+                 } else {
+                     let new_island = Island::singleton(handle);
+                     let id = self.free_islands.pop().unwrap_or(self.islands.len());
+@@ -481,3 +511,16 @@ impl IslandManager {
+         }
+     }
+ }
++
++/// Whether `RAPIER_STABLE_EPOCH` is set to something other than `0` (read once).
++pub(crate) fn stable_epoch_on() -> bool {
++    #[cfg(feature = "std")]
++    {
++        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++        *ON.get_or_init(|| std::env::var("RAPIER_STABLE_EPOCH").is_ok_and(|v| v.trim() != "0"))
++    }
++    #[cfg(not(feature = "std"))]
++    {
++        false
++    }
++}
+diff --git a/src/geometry/narrow_phase/mod.rs b/src/geometry/narrow_phase/mod.rs
+index 8d13be8..b0c58d0 100644
+--- a/src/geometry/narrow_phase/mod.rs
++++ b/src/geometry/narrow_phase/mod.rs
+@@ -348,6 +348,9 @@ pub struct NarrowPhase {
+     /// else `(active_set_id << 32) | is_dynamic`.
+     #[cfg_attr(feature = "serde-serialize", serde(skip))]
+     body_qualify_info: Vec<u64>,
++    /// TABPerf: how many of [`IslandManager::appended_active_bodies`] are in `body_qualify_info`.
++    #[cfg_attr(feature = "serde-serialize", serde(skip))]
++    body_qualify_appended: usize,
+     /// Workspace: per-body awake bit (arena index), rebuilt each narrow-phase update.
+     /// Internal motion sets no change flags, so "the parent body is awake" is the
+     /// narrow-phase's it-may-have-moved signal for pair updates.
+@@ -438,6 +441,7 @@ impl NarrowPhase {
+             retired_pairs: Vec::new(),
+             body_solver_color_masks: Vec::new(),
+             body_qualify_info: Vec::new(),
++            body_qualify_appended: 0,
+             awake_body_mask: Vec::new(),
+             pair_solver_hints: Vec::new(),
+             solver_contact_graph: SolverContactGraph::new(),
+diff --git a/src/geometry/narrow_phase/solver_graph.rs b/src/geometry/narrow_phase/solver_graph.rs
+index a97a86a..ea055b3 100644
+--- a/src/geometry/narrow_phase/solver_graph.rs
++++ b/src/geometry/narrow_phase/solver_graph.rs
+@@ -75,9 +75,7 @@ impl NarrowPhase {
+                         if let Some(rb) = bodies.get(*handle) {
+                             // SAFETY: active handles are distinct, so the slots are disjoint.
+                             unsafe {
+-                                *info_ptr.add(handle.into_raw_parts().0 as usize) =
+-                                    ((rb.ids.active_set_id as u64) << 32)
+-                                        | rb.body_type.is_dynamic() as u64;
++                                *info_ptr.add(handle.into_raw_parts().0 as usize) = qualify_info(rb);
+                             }
+                         }
+                     }
+@@ -88,8 +86,7 @@ impl NarrowPhase {
+         #[cfg(not(feature = "parallel"))]
+         for handle in islands.active_bodies() {
+             if let Some(rb) = bodies.get(handle) {
+-                self.body_qualify_info[handle.into_raw_parts().0 as usize] =
+-                    ((rb.ids.active_set_id as u64) << 32) | rb.body_type.is_dynamic() as u64;
++                self.body_qualify_info[handle.into_raw_parts().0 as usize] = qualify_info(rb);
+             }
+         }
+     }
+@@ -142,9 +139,28 @@ impl NarrowPhase {
+         // The body qualification table stays exact while the active set is unchanged: every
+         // membership change bumps the island epoch or clears `solver_graph_valid` (both folded
+         // into `full_rebuild`), so it rebuilds on exactly the solver graph's rebuild condition.
++        let appended = &islands.appended_active_bodies;
+         if full_rebuild || self.body_qualify_info.is_empty() {
+             self.rebuild_body_qualify_info(islands, bodies);
++        } else {
++            // Bodies that joined the awake island since the table was built, without an epoch
++            // bump (RAPIER_STABLE_EPOCH): the other slots are unchanged, so only theirs are added.
++            // The list restarts on every bump, which also rebuilds the table.
++            for handle in appended.get(self.body_qualify_appended..).unwrap_or_default() {
++                let Some(rb) = bodies.get(*handle) else {
++                    continue;
++                };
++                if Some(rb.ids.active_island_id as usize) != islands.awake_island {
++                    continue;
++                }
++                let index = handle.into_raw_parts().0 as usize;
++                if index >= self.body_qualify_info.len() {
++                    self.body_qualify_info.resize(index + 1, u64::MAX);
++                }
++                self.body_qualify_info[index] = qualify_info(rb);
++            }
+         }
++        self.body_qualify_appended = appended.len();
+         #[cfg(debug_assertions)]
+         self.debug_validate_body_qualify_info(islands, bodies);
+         let has_multibodies = multibody_joints.iter().next().is_some();
+@@ -841,3 +857,9 @@ impl NarrowPhase {
+         &self.solver_contact_graph
+     }
+ }
++
++/// A body's entry in the body qualification table: `(active_set_id << 32) | is_dynamic`.
++#[inline]
++fn qualify_info(rb: &crate::dynamics::RigidBody) -> u64 {
++    ((rb.ids.active_set_id as u64) << 32) | rb.body_type.is_dynamic() as u64
++}

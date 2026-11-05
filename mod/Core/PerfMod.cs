@@ -84,6 +84,7 @@ namespace Billions
             Step("프레임 훅", () => PerfHooks.Install(h));
             Step("성능 시험 모드", () => Bench.Install(h));
             Step("로직 갱신 계측", () => LogicProf.Install(h));
+            Step("로직 틱 내부 계측", () => TickProf.Install(h));
             Log.Info("설치 끝 — 물리 DLL: " + PhysicsDll());
         }
 
@@ -125,12 +126,14 @@ namespace Billions
         }
         static void OnStartFrame()
         {
+            SmoothTime.Frame();
             try { ZSort.Frame(); } catch (Exception e) { Log.Error("zsort frame", e); }
             try { if (ZXLevelState.get_Current() != null) FarField.Frame(); } catch (Exception e) { Log.Error("far frame", e); }
             if (Bench.Enabled) try { Bench.Frame(); } catch (Exception e) { Log.Error("bench frame", e); }
         }
         static void OnLevelUnloaded()
         {
+            SmoothTime.OnLevelUnloaded();
             try { EnergyFix.OnLevelUnloaded(); } catch (Exception e) { Log.Error("energy unload", e); }
             try { FarField.OnLevelUnloaded(); } catch (Exception e) { Log.Error("far unload", e); }
             try { ZSort.OnLevelUnloaded(); } catch (Exception e) { Log.Error("zsort unload", e); }
